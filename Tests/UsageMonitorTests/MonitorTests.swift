@@ -85,6 +85,16 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(MenuBarAccountImage.text(.init(title: "Quota", kind: .quota, value: nil)) == "—")
 }
 
+@MainActor @Test func ampQuotaTextMatchesDashboardRoundingWithoutChangingOtherProviders() {
+    let cases: [(Double, String)] = [(0, "0%"), (0.04, "<0.5%"), (0.49, "<0.5%"), (0.5, "1%"),
+                                   (8.9, "9%"), (57.3, "57%"), (99.49, "99%"), (99.5, ">99.5%"), (100, "100%")]
+    for (value, expected) in cases {
+        #expect(MenuBarAccountImage.text(.init(title: "Agent", kind: .quota, value: value), provider: .amp) == expected)
+    }
+    #expect(MenuBarAccountImage.text(.init(title: "Weekly", kind: .quota, value: 8.9), provider: .codex) == "8.9%")
+    #expect(MenuBarAccountImage.text(.init(title: "Agent", kind: .quota, value: nil), provider: .amp) == "—")
+}
+
 @Test func freshProfilesNeverUseAnAmbientCredentialAndMetadataSurvivesRestart() throws {
     let store = try temporaryStore()
     defer { try? FileManager.default.removeItem(at: store.root) }

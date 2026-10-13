@@ -102,7 +102,7 @@ struct MonitorView: View {
                 Button("Refresh") { Task { await monitor.refresh(entry.id) } }
                     .buttonStyle(.borderless).disabled(demo || entry.refreshing || entry.resetting || login.accountID != nil)
                 if entry.account.provider == .codex {
-                    Button("Reset details…") { showResets(entry.account) }
+                    Button("View / use resets…") { showResets(entry.account) }
                         .buttonStyle(.borderless).disabled(login.accountID != nil || entry.resetting)
                 }
                 Spacer()

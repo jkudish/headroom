@@ -1,9 +1,15 @@
 import AppKit
 
 @MainActor enum MenuBarAccountImage {
-    static func text(_ metric: UsageMetric) -> String {
+    static func text(_ metric: UsageMetric, provider: Provider? = nil) -> String {
         guard let value = metric.value, value.isFinite else { return "—" }
         if metric.kind == .quota {
+            if provider == .amp {
+                if value == 0 || value == 100 { return "\(Int(value))%" }
+                if value < 0.5 { return "<0.5%" }
+                if value >= 99.5 { return ">99.5%" }
+                return "\(Int(value.rounded()))%"
+            }
             if value > 0 && value < 1 { return "<1%" }
             return value.formatted(.number.precision(.fractionLength(0...1))) + "%"
         }
@@ -34,7 +40,7 @@ import AppKit
 
     static func make(_ entry: AccountEntry, appearance: NSAppearance) -> NSImage {
         let metrics = entry.menuBarMetrics
-        let values = metrics.isEmpty ? [entry.refreshing ? "…" : "—"] : metrics.map(text)
+        let values = metrics.isEmpty ? [entry.refreshing ? "…" : "—"] : metrics.map { text($0, provider: entry.account.provider) }
         let stacked = values.count == 2
         let font = NSFont.monospacedDigitSystemFont(ofSize: stacked ? 9 : 12, weight: .semibold)
         let width = ceil(values.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 12)

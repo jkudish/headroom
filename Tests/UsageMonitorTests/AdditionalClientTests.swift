@@ -18,12 +18,64 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     #expect(result.metrics.contains(.init(title: "Individual credits", kind: .balance, value: 31.25, unit: "USD")))
     #expect(result.reportedEmail == "test@example.test")
     #expect(result.identity == nil) // Display metadata does not invent a stable owner ID.
-    #expect(result.metrics.first { $0.kind == .cap && $0.unit == "USD" }?.title == "Provider-reported agent cap")
+    #expect(!result.metrics.contains { $0.title == "Provider-reported agent cap" })
     let missingOrb = try await AdditionalClient(http: additionalHTTP(#"{"ok":true,"result":{"displayText":"agent usage $55.02 of $600 remaining\nIndividual credits: $17 remaining"}}"#))
         .fetch(Account(label: "", provider: .amp), secrets: .init(key: "fixture-amp"))
-    #expect(missingOrb.metrics.first { $0.title == "Provider-reported agent cap" }?.value == 600)
+    #expect(!missingOrb.metrics.contains { $0.kind == .cap && $0.unit == "USD" })
     #expect(missingOrb.metrics.first { $0.title == "Orb usage" }?.detail == "Unavailable — not returned by Amp")
     #expect(!missingOrb.metrics.contains { $0.title == "Orb" && $0.value != nil })
+}
+
+@Test func ampDashboardSuppliesEmailTierAndIndependentOrbQuotaForTheSelectedToken() async throws {
+    // SvelteKit remote-query reference table. Each object's values are table indices;
+    // Date's payload is inline, unlike ordinary object properties.
+    let panel = #"""
+    [{"_":1,"q":15},{"user":2,"subscription":4,"subscriptionUsageBuckets":8},
+     {"email":3},"amp@example.test",{"planName":5,"periodEndAt":6},"Gigawatt",
+     ["Date","2026-10-19T00:00:00.000Z"],null,{"general":9,"orb":11},
+     {"percentRemaining":10},8.9,{"percentRemaining":12},57.3,null,null,
+     {"rjke8/getAccountSettingsPanelData/":16},{"v":1}]
+    """#
+    let encoded = try JSONSerialization.data(withJSONObject: ["type": "result", "data": panel])
+    let client = AdditionalClient(http: ProviderHTTP { request in
+        #expect(request.url?.host == "ampcode.com")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer selected-amp")
+        let body: Data
+        if request.url?.path == "/_app/remote/rjke8/getAccountSettingsPanelData" {
+            #expect(request.httpMethod == "GET")
+            #expect(request.httpBody == nil)
+            body = encoded
+        } else {
+            #expect(request.url?.path == "/api/internal")
+            #expect(request.url?.query == "userDisplayBalanceInfo")
+            #expect(request.httpMethod == "POST")
+            body = Data(#"{"ok":true,"result":{"displayText":"agent usage $55.02 of $600 remaining\nIndividual credits: $17 remaining"}}"#.utf8)
+        }
+        return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    })
+    let result = try await client.fetch(.init(label: "", provider: .amp), secrets: .init(key: "selected-amp"))
+    #expect(result.reportedEmail == "amp@example.test")
+    #expect(result.plan == "Gigawatt")
+    #expect(result.metrics.first { $0.title == "Agent" }?.value == 8.9)
+    #expect(result.metrics.first { $0.title == "Orb" }?.value == 57.3)
+    #expect(result.metrics.filter { $0.kind == .quota }.allSatisfy { $0.resetsAt == Date(timeIntervalSince1970: 1792368000) })
+    #expect(result.metrics.contains(.init(title: "Individual credits", kind: .balance, value: 17, unit: "USD")))
+    #expect(!result.metrics.contains { $0.title == "Agent remaining" || $0.kind == .cap || $0.kind == .note })
+}
+
+@Test(arguments: ["denied", "malformed", "invalid-values"])
+func ampSupplementalFailurePreservesCreditsWithoutInventingDashboardValues(_ mode: String) async throws {
+    let panel = #"[{"q":1},{"rjke8/getAccountSettingsPanelData/":2},{"v":3},{"user":4,"subscriptionUsageBuckets":6},{"email":5},"bad email",{"general":7,"orb":9},{"percentRemaining":8},true,{"percentRemaining":10},150]"#
+    let encoded = try JSONSerialization.data(withJSONObject: ["type": "result", "data": mode == "malformed" ? #"[{"q":999}]"# : panel])
+    let client = AdditionalClient(http: ProviderHTTP { request in
+        let dashboard = request.url?.path.contains("/remote/") == true
+        let body = dashboard ? encoded : Data(#"{"ok":true,"result":{"displayText":"Individual credits: $17 remaining"}}"#.utf8)
+        return (body, HTTPURLResponse(url: request.url!, statusCode: dashboard && mode == "denied" ? 403 : 200, httpVersion: nil, headerFields: nil)!)
+    })
+    let result = try await client.fetch(.init(label: "", provider: .amp), secrets: .init(key: "selected"))
+    #expect(result.reportedEmail == nil)
+    #expect(result.metrics.first { $0.kind == .balance }?.value == 17)
+    #expect(result.metrics.filter { $0.kind == .quota }.allSatisfy { $0.value == nil })
 }
 
 @Test func grokConvertsCentsButDoesNotInventASecondWindow() async throws {

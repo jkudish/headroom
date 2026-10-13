@@ -40,9 +40,9 @@ struct AccountSummaryView: View {
                     Divider()
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
-                            Text("Limit Reset Credits").font(.callout.weight(.medium))
+                            Text("Available resets").font(.callout.weight(.medium))
                             Spacer(minLength: 4)
-                            Text(snapshot.resetCredits.map { "\($0.availableCount) available" } ?? "Unavailable")
+                            Text(snapshot.resetCredits.map { "\($0.availableCount)" } ?? "Unavailable")
                                 .font(.callout.monospacedDigit())
                         }
                         if let expiry = snapshot.resetCredits?.expirations.first {
@@ -81,7 +81,7 @@ struct AccountSummaryView: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Text(metric.title).font(.callout.weight(.medium))
-                    Text(metric.value == nil ? "Unavailable" : "\(MenuBarAccountImage.text(metric)) left")
+                    Text(metric.value == nil ? "Unavailable" : "\(MenuBarAccountImage.text(metric, provider: entry.account.provider)) left")
                         .font(.callout.monospacedDigit()).foregroundStyle(metric.remainingColor)
                     Spacer(minLength: 0)
                 }

@@ -12,7 +12,7 @@ struct ResetCreditsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Limit Reset Credits").font(.title2.weight(.semibold))
+            Text("Available resets").font(.title2.weight(.semibold))
             Text(entry?.displayName ?? "Account unavailable").font(.headline).textSelection(.enabled)
             Text(entry?.snapshot?.resetCredits.map { "\($0.availableCount) available" } ?? "Inventory unavailable")
                 .foregroundStyle(.secondary)

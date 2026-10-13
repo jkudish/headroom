@@ -77,6 +77,7 @@ struct AdditionalClient: Sendable {
         var metrics: [UsageMetric] = []
         var identity: AccountIdentity?
         var reportedEmail: String?
+        var plan: String?
         switch account.provider {
         case .amp:
             guard root["ok"] as? Bool == true, let result = root["result"] as? [String: Any],
@@ -86,9 +87,7 @@ struct AdditionalClient: Sendable {
             let orb = capture(#"orb usage ([0-9.]+)h of ([0-9.]+)h a1\.small orb hours remaining"#, in: text).compactMap(Double.init)
             if agent.count == 2 {
                 metrics += [.init(title: "Agent", kind: .quota, value: percent(agent[0], limit: agent[1])),
-                            .init(title: "Agent remaining", kind: .balance, value: agent[0], unit: "USD"),
-                            .init(title: "Provider-reported agent cap", kind: .cap, value: agent[1], unit: "USD",
-                                  detail: "Included allowance reported by Amp; not your wallet balance or a subscription charge")]
+                            .init(title: "Agent remaining", kind: .balance, value: agent[0], unit: "USD")]
             }
             if orb.count == 2 {
                 metrics += [.init(title: "Orb", kind: .quota, value: percent(orb[0], limit: orb[1])),
@@ -104,6 +103,17 @@ struct AdditionalClient: Sendable {
             if metrics.isEmpty { throw MonitorError.invalidResponse }
             if agent.isEmpty { metrics.append(.init(title: "Agent allowance", kind: .note, value: nil, detail: "Not reported by this plan")) }
             if orb.isEmpty { metrics.append(.init(title: "Orb usage", kind: .note, value: nil, detail: "Unavailable — not returned by Amp")) }
+            // Amp's own Account panel has separate subscription buckets. The CLI's
+            // dollar allowance is not assumed to be the same meter as that panel.
+            if let data = try? await request("https://ampcode.com/_app/remote/rjke8/getAccountSettingsPanelData", secrets: secrets),
+               let panel = try? ampDashboard(data) {
+                reportedEmail = panel.reportedEmail ?? reportedEmail
+                plan = panel.plan
+                if !panel.metrics.isEmpty {
+                    metrics.removeAll { ["Agent", "Agent remaining", "Agent allowance", "Orb", "Orb remaining", "Orb allowance", "Orb usage"].contains($0.title) }
+                    metrics.insert(contentsOf: panel.metrics, at: 0)
+                }
+            }
         case .grok:
             guard let config = root["config"] as? [String: Any] else { throw MonitorError.invalidResponse }
             let period = config["currentPeriod"] as? [String: Any] ?? [:]
@@ -168,7 +178,42 @@ struct AdditionalClient: Sendable {
                        .init(title: "Wallet balance", kind: .note, value: nil, detail: "Not returned by the Team Management usage API")]
         default: throw MonitorError.invalidResponse
         }
-        return UsageSnapshot(identity: identity, metrics: metrics, reportedEmail: reportedEmail)
+        return UsageSnapshot(identity: identity, metrics: metrics, plan: plan, reportedEmail: reportedEmail)
+    }
+
+    private func ampDashboard(_ data: Data) throws -> UsageSnapshot {
+        // Narrow devalue reader for the public frontend's zero-argument query.
+        // No JS execution or recursive hydration; only fixed field paths are read.
+        guard data.count <= 1_048_576,
+              let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              envelope["type"] as? String == "result", let encoded = envelope["data"] as? String,
+              let bytes = encoded.data(using: .utf8),
+              let nodes = try JSONSerialization.jsonObject(with: bytes) as? [Any], !nodes.isEmpty else {
+            throw MonitorError.invalidResponse
+        }
+        func field(_ object: Any?, _ key: String) -> Any? {
+            guard let reference = number((object as? [String: Any])?[key]),
+                  reference >= 0, reference < Double(nodes.count), reference.rounded(.towardZero) == reference else { return nil }
+            return nodes[Int(reference)]
+        }
+        guard let panel = field(field(field(nodes[0], "q"), "rjke8/getAccountSettingsPanelData/"), "v") as? [String: Any],
+              field(panel, "user") is [String: Any] else { throw MonitorError.invalidResponse }
+        let email = (field(field(panel, "user"), "email") as? String).flatMap {
+            $0.range(of: #"^[^\s@]+@[^\s@]+$"#, options: .regularExpression) != nil ? $0 : nil
+        }
+        let subscription = field(panel, "subscription")
+        let plan = (field(subscription, "planName") as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let taggedDate = field(subscription, "periodEndAt") as? [String]
+        let reset = taggedDate?.count == 2 && taggedDate?.first == "Date" ? date(taggedDate?[1]) : nil
+        var metrics: [UsageMetric] = []
+        if let buckets = field(panel, "subscriptionUsageBuckets") as? [String: Any] {
+            for (key, title) in [("general", "Agent"), ("orb", "Orb")] {
+                let remaining = number(field(field(buckets, key), "percentRemaining"))
+                    .flatMap { (0...100).contains($0) ? $0 : nil }
+                metrics.append(.init(title: title, kind: .quota, value: remaining, resetsAt: reset))
+            }
+        }
+        return UsageSnapshot(metrics: metrics, plan: plan, reportedEmail: email)
     }
 
     private func request(_ endpoint: String, secrets: ConnectionSecrets, method: String = "GET", body: Data? = nil,

@@ -95,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func openResetDetails(_ account: Account) {
         guard let monitor, account.provider == .codex, login.accountID == nil, connectionWindow == nil else { return }
         openWindow()
-        presentSheet("Limit Reset Credits", content: ResetCreditsView(monitor: monitor, accountID: account.id, demo: demo) { [weak self] in
+        presentSheet("Available resets", content: ResetCreditsView(monitor: monitor, accountID: account.id, demo: demo) { [weak self] in
             self?.closeSheet()
         })
     }
@@ -160,7 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         button.image = MenuBarAccountImage.make(monitor.entries, appearance: button.effectiveAppearance)
         let labels = monitor.entries.filter { $0.account.showInMenuBar }.map { entry in
-            let readings = entry.menuBarMetrics.map { "\($0.title): \(MenuBarAccountImage.text($0))" }.joined(separator: ", ")
+            let readings = entry.menuBarMetrics.map { "\($0.title): \(MenuBarAccountImage.text($0, provider: entry.account.provider))" }.joined(separator: ", ")
             return "\(entry.account.provider.title) — \(entry.displayName): \(readings.isEmpty ? entry.error ?? "Usage unavailable" : readings)"
         }
         let label = labels.isEmpty ? "Usage Monitor — open all accounts" : labels.joined(separator: "\n")
@@ -184,6 +184,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             row.view = content
             row.isEnabled = false
             menu.addItem(row)
+            if entry.account.provider == .codex {
+                addItem("View / use resets…", to: menu, action: #selector(showResetDetails),
+                        represented: entry.id.uuidString, enabled: login.accountID == nil && !entry.resetting)
+            }
             let actions = NSMenuItem(title: "Account actions", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             submenu.autoenablesItems = false
@@ -192,10 +196,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             addItem(entry.account.provider.usesHelper ? "Sign in / reconnect…" : "Update credentials…", to: submenu,
                     action: #selector(reconnectAccount), represented: entry.id.uuidString, enabled: idle)
             addItem("Provider dashboard", to: submenu, action: #selector(openDashboard), represented: entry.id.uuidString)
-            if entry.account.provider == .codex {
-                addItem("Reset details / use…", to: submenu, action: #selector(showResetDetails),
-                        represented: entry.id.uuidString, enabled: login.accountID == nil && !entry.resetting)
-            }
             addItem("Account settings…", to: submenu, action: #selector(showAccountWindow))
             actions.submenu = submenu
             menu.addItem(actions)
@@ -330,11 +330,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                                           grantedAt: nil, expiresAt: nil, title: "Used reset", description: nil)
                                  ]))
         case .amp:
-            return UsageSnapshot(metrics: [.init(title: "Agent remaining", kind: .balance, value: 18.57, unit: "USD"),
-                                           .init(title: "Provider-reported agent cap", kind: .cap, value: 600, unit: "USD",
-                                                 detail: "Included allowance reported by Amp; not your wallet balance or a subscription charge"),
-                                           .init(title: "Orb remaining", kind: .count, value: 732.8, unit: "a1.small hours"),
-                                           .init(title: "Individual credits", kind: .balance, value: 31.25, unit: "USD")], reportedEmail: "amp@example.test")
+            return UsageSnapshot(metrics: [.init(title: "Agent", kind: .quota, value: 8.9, resetsAt: reset),
+                                           .init(title: "Orb", kind: .quota, value: 57.3, resetsAt: reset),
+                                           .init(title: "Individual credits", kind: .balance, value: 31.25, unit: "USD")],
+                                 plan: "Gigawatt", reportedEmail: "amp@example.test")
         case .openRouter:
             return UsageSnapshot(metrics: [.init(title: "Wallet credits", kind: .balance, value: 37.82, unit: "USD")])
         default: break
