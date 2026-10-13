@@ -352,6 +352,34 @@ private actor ResetRecoveryFixture {
     #expect(bob.plan == "Pro")
 }
 
+@Test func freshClaudeProfileOverridesCachedPlanWithoutBorrowingItsMultiplier() async throws {
+    let cases: [(String, String)] = [
+        (#""rate_limit_tier":"default_claude_max_20x","organization_type":"claude_max""#, "Max 20x"),
+        (#""rate_limit_tier":"default_claude_max_5x","organization_type":"claude_max""#, "Max 5x"),
+        (#""organization_type":"claude_max""#, "Max"),
+        (#""organization_type":"claude_pro""#, "Pro"),
+        (#""rate_limit_tier":{},"organization_type":"claude_max""#, "Max"),
+        (#""rate_limit_tier":17,"organization_type":null"#, "Max 5x"),
+        (#""rate_limit_tier":"unknown_future_tier","organization_type":"unknown""#, "Max 5x"),
+        (#""organization_type":false"#, "Max 5x")
+    ]
+    for (fields, expected) in cases {
+        let client = ClaudeClient(credentials: { _ in
+            try Credential.decode(response(#"{"claudeAiOauth":{"accessToken":"fixture","scopes":["user:profile"],"subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}"#))
+        }, send: { request in
+            let payload = request.url?.lastPathComponent == "profile"
+                ? "{\"account\":{\"uuid\":\"alice\",\"email\":\"alice@example.test\"},\"organization\":{\"uuid\":\"org\",\(fields)}}"
+                : #"{"five_hour":{"utilization":23},"seven_day":{"utilization":68}}"#
+            return (response(payload), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        let snapshot = try await client.fetch(UUID())
+        #expect(snapshot.plan == expected, "Fresh profile: \(fields)")
+        #expect(snapshot.identity?.accountID == "alice")
+        #expect(snapshot.metrics[0].value == 77)
+        #expect(snapshot.metrics[1].value == 32)
+    }
+}
+
 @Test(arguments: ["null", "17", "{}"])
 func malformedOptionalClaudePlanDoesNotInvalidateUsageCredentials(_ plan: String) throws {
     let credential = try Credential.decode(response("""

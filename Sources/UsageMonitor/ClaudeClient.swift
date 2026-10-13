@@ -49,7 +49,26 @@ struct ClaudeClient: Sendable {
                     name = displayName?.isEmpty == false ? displayName : nil
                 }
             }
-            struct Organization: Decodable { let uuid: String }
+            struct Organization: Decodable {
+                let uuid: String
+                let rateLimitTier: String?
+                let organizationType: String?
+                enum CodingKeys: String, CodingKey {
+                    case uuid, rateLimitTier = "rate_limit_tier", organizationType = "organization_type"
+                }
+                init(from decoder: Decoder) throws {
+                    let values = try decoder.container(keyedBy: CodingKeys.self)
+                    uuid = try values.decode(String.self, forKey: .uuid)
+                    rateLimitTier = try? values.decode(String.self, forKey: .rateLimitTier)
+                    organizationType = try? values.decode(String.self, forKey: .organizationType)
+                }
+                var planLabel: String? {
+                    let family = organizationType.flatMap { $0.hasPrefix("claude_") ? String($0.dropFirst(7)) : nil }
+                    // Fresh tier wins. A fresh family without a multiplier must not reuse a cached one.
+                    return Credential.planLabel(subscriptionType: nil, rateLimitTier: rateLimitTier)
+                        ?? Credential.planLabel(subscriptionType: family, rateLimitTier: nil)
+                }
+            }
             let account: User
             let organization: Organization
         }
@@ -60,7 +79,7 @@ struct ClaudeClient: Sendable {
         return UsageSnapshot(
             identity: AccountIdentity(accountID: decoded.account.uuid, organizationID: decoded.organization.uuid,
                                       email: decoded.account.email ?? "Email unavailable", name: decoded.account.name),
-            usage: usage, fetchedAt: Date(), plan: credential.planLabel
+            usage: usage, fetchedAt: Date(), plan: decoded.organization.planLabel ?? credential.planLabel
         )
     }
 

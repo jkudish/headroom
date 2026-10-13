@@ -5,6 +5,7 @@ import Security
 
 struct AccountStore: Sendable {
     let root: URL
+    private static let keychainLock = NSLock()
 
     init(root: URL) throws {
         self.root = root.standardizedFileURL
@@ -64,7 +65,9 @@ struct AccountStore: Sendable {
         context.interactionNotAllowed = !allowInteraction
         query[kSecUseAuthenticationContext as String] = context
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        let status = try keychainOperation(allowInteraction: allowInteraction) {
+            SecItemCopyMatching(query as CFDictionary, &item)
+        }
         if status == errSecSuccess, let data = item as? Data { return try Credential.decode(data) }
         guard status == errSecItemNotFound else { throw MonitorError.keychainUnavailable }
         // Claude Code uses this scoped fallback when the macOS Keychain cannot accept a write.
@@ -84,13 +87,15 @@ struct AccountStore: Sendable {
               secrets.key.utf8.count <= 16384 else { throw MonitorError.signInRequired }
         let data = try JSONEncoder().encode(secrets)
         let query = secretQuery(id)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var item = query
-            item[kSecValueData as String] = data
-            item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-            guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw MonitorError.keychainUnavailable }
-        } else if status != errSecSuccess { throw MonitorError.keychainUnavailable }
+        try keychainOperation(allowInteraction: true) {
+            let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            if status == errSecItemNotFound {
+                var item = query
+                item[kSecValueData as String] = data
+                item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+                guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw MonitorError.keychainUnavailable }
+            } else if status != errSecSuccess { throw MonitorError.keychainUnavailable }
+        }
     }
 
     func secrets(_ id: UUID, allowInteraction: Bool = false) throws -> ConnectionSecrets {
@@ -102,7 +107,9 @@ struct AccountStore: Sendable {
         context.interactionNotAllowed = !allowInteraction
         query[kSecUseAuthenticationContext as String] = context
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        let status = try keychainOperation(allowInteraction: allowInteraction) {
+            SecItemCopyMatching(query as CFDictionary, &item)
+        }
         if status == errSecItemNotFound { throw MonitorError.signInRequired }
         guard status == errSecSuccess, let data = item as? Data,
               let secrets = try? JSONDecoder().decode(ConnectionSecrets.self, from: data) else {
@@ -131,14 +138,33 @@ struct AccountStore: Sendable {
 
     func deleteProfile(_ id: UUID) throws {
         try validateProfile(id)
-        let status = SecItemDelete(keychainQuery(id) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw MonitorError.keychainUnavailable }
-        let secretStatus = SecItemDelete(secretQuery(id) as CFDictionary)
-        guard secretStatus == errSecSuccess || secretStatus == errSecItemNotFound else { throw MonitorError.keychainUnavailable }
+        try keychainOperation(allowInteraction: true) {
+            let status = SecItemDelete(keychainQuery(id) as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw MonitorError.keychainUnavailable }
+            let secretStatus = SecItemDelete(secretQuery(id) as CFDictionary)
+            guard secretStatus == errSecSuccess || secretStatus == errSecItemNotFound else { throw MonitorError.keychainUnavailable }
+        }
         let directory = profile(id).deletingLastPathComponent()
         if FileManager.default.fileExists(atPath: directory.path) {
             try FileManager.default.removeItem(at: directory)
         }
+    }
+
+    private func keychainOperation<T>(allowInteraction: Bool, _ operation: () throws -> T) throws -> T {
+        // LAContext alone does not suppress legacy macOS Keychain permission dialogs.
+        // This flag is process-wide: serialize every SecItem call, including explicit grants/writes.
+        Self.keychainLock.lock()
+        defer { Self.keychainLock.unlock() }
+        var previous: DarwinBoolean = false
+        guard SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess,
+              SecKeychainSetUserInteractionAllowed(allowInteraction) == errSecSuccess else {
+            throw MonitorError.keychainUnavailable
+        }
+        let result = Result { try operation() }
+        guard SecKeychainSetUserInteractionAllowed(previous.boolValue) == errSecSuccess else {
+            throw MonitorError.keychainUnavailable
+        }
+        return try result.get()
     }
 
     private func keychainQuery(_ id: UUID) -> [String: Any] {

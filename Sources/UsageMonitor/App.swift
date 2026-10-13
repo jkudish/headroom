@@ -205,8 +205,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         connect.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Connect service")
         let providers = NSMenu()
         providers.autoenablesItems = false
-        for provider in Provider.allCases {
-            addItem(provider.title + (provider.supportsRead ? "" : " — dashboard only"), to: providers,
+        for provider in Provider.allCases.filter(\.supportsRead) {
+            addItem(provider.title, to: providers,
                     action: #selector(connectProvider), represented: provider.rawValue, enabled: login.accountID == nil)
         }
         connect.submenu = providers

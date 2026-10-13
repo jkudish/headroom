@@ -18,14 +18,14 @@ The app appears in the Dock and Command-Tab while its account window is open; cl
 open -n .build/UsageMonitor.app --args --demo
 ```
 
-The build is Apple Silicon, locally ad-hoc signed, and **not notarized**. The build script does not install or replace an app.
+The build is Apple Silicon, signed with Joachim Kudish's personal Apple Development certificate (team `K7RS6S7JX2`), and **not notarized**. The build script requires that certificate and fails rather than falling back to an ad-hoc identity. It does not install or replace an app.
 
 ## Connect accounts
 
 1. Choose a provider from **+ Connect service…** in the menu, or the **+** in the account window.
 2. For Claude or Codex, open the generated link in the browser profile for the account you want. The official helper owns token exchange. Claude may ask you to paste an authorization code into the app. Codex shows a device code: enter it on OpenAI's page, then wait for browser approval. Enable device code authorization in ChatGPT Security settings if required.
 3. For other connectors, enter a separate key or token in the native connection form. Check the required credential type below. Do not paste codes, tokens, cookies, or passwords into an agent chat.
-4. If macOS blocks a scoped Keychain read, click **Allow Keychain access**. Allow only that connection's entry; **Always Allow** permits later checks. Do not reset the login Keychain.
+4. Ordinary refreshes disable both legacy-Keychain interaction and `LAContext` authentication UI. Blocked access stays in the app instead of requesting permission repeatedly. Click **Allow Keychain access** for that connection; **Always Allow** permits later checks. After moving from an ad-hoc build to the personal signing certificate, each existing entry may need one new approval. Explicit saves/removals may also request access. Do not reset the login Keychain or approve unrelated entries.
 5. Repeat for another account. Headings use email when returned, otherwise a provider account ID or a new-account placeholder. Custom names are no longer requested or displayed; legacy labels remain in storage. **Show in menu bar** toggles each account's bar reading without hiding it from the dropdown. All-hidden still leaves a clickable gauge.
 6. Compare each reading with its provider dashboard. Quit/reopen and refresh again to check persistence. Use **Reconnect account…** for expired credentials. To change the selected identity, remove that connection and add a new one.
 
@@ -35,7 +35,7 @@ These are implemented reads, not a claim of live verification for every provider
 
 | Connection | Credential | Reported information and limits |
 |---|---|---|
-| Claude | Independent official-helper sign-in | 5-hour/weekly remaining and reset; plan from this account's helper metadata when present; extra-usage monthly spend/cap, not prepaid credits |
+| Claude | Independent official-helper sign-in | 5-hour/weekly remaining and reset; recognized current profile tier/family overrides cached helper plan on every refresh; extra-usage monthly spend/cap, not prepaid credits |
 | Codex | Independent official-helper device sign-in; Copy code button | Returned plan (Pro 100/200/500), quota windows, reset, wallet credits and individual credit allowance. Supplemental reset inventory/details and confirmed selected-credit redemption. Credits are not assumed to be USD or raw tokens. Identity binds a human and selected workspace |
 | z.ai Coding Plan | Coding Plan API key; Global or China region | Returned quota types, periods, and resets; no wallet balance or established API-key account-email lookup |
 | OpenRouter wallet | Management key | Purchased-minus-used wallet USD credits |
@@ -57,7 +57,7 @@ These are implemented reads, not a claim of live verification for every provider
 | Exa | Team Management service key plus selected API key ID | Selected-key 30-day spend; requires Team Management access; no wallet balance |
 | Jina AI | API key | Experimental root-response token balance; changed format fails visibly |
 
-**Brave, Perplexity, Gemini, and Kagi are dashboard-only.** An independent billing credential/API contract is not implemented. Their forms collect no credentials. Librarium model variants share their billing family; they are not separate balances.
+Brave, Perplexity, Gemini, and Kagi have no implemented billing connector and are no longer offered in either connection menu. Legacy provider identifiers remain decodable so an update does not destroy saved data. Librarium model variants share their billing family; they are not separate balances.
 
 “Grokbot” is provisionally interpreted as Cursor Grok Bot. Another product needs its own connector.
 

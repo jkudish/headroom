@@ -209,6 +209,10 @@ struct Credential: Decodable, Sendable {
     var rateLimitTier: String? = nil
 
     var planLabel: String? {
+        Self.planLabel(subscriptionType: subscriptionType, rateLimitTier: rateLimitTier)
+    }
+
+    static func planLabel(subscriptionType: String?, rateLimitTier: String?) -> String? {
         let plans = ["pro": "Pro", "max": "Max", "team": "Team", "enterprise": "Enterprise"]
         let tier = (rateLimitTier ?? "").lowercased().split(separator: "_").map(String.init)
         let plan = subscriptionType.flatMap { plans[$0.lowercased()] }

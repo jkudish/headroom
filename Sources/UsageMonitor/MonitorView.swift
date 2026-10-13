@@ -81,12 +81,6 @@ struct MonitorView: View {
             ForEach(Provider.allCases.filter(\.supportsRead)) { provider in
                 Button(provider.title) { addProvider(provider) }
             }
-            Divider()
-            Menu("Dashboard only — not connected yet") {
-                ForEach(Provider.allCases.filter { !$0.supportsRead }) { provider in
-                    Button(provider.title) { connect(provider, nil) }
-                }
-            }
         } label: {
             Image(systemName: "plus").font(.title3.weight(.medium)).frame(width: 28, height: 28)
         }
