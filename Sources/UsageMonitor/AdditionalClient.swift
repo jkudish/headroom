@@ -204,7 +204,19 @@ struct AdditionalClient: Sendable {
         let subscription = field(panel, "subscription")
         let plan = (field(subscription, "planName") as? String).flatMap { $0.isEmpty ? nil : $0 }
         let taggedDate = field(subscription, "periodEndAt") as? [String]
-        let reset = taggedDate?.count == 2 && taggedDate?.first == "Date" ? date(taggedDate?[1]) : nil
+        let periodEnd = taggedDate?.count == 2 && taggedDate?.first == "Date" ? date(taggedDate?[1]) : nil
+        func boolean(_ raw: Any?) -> Bool? {
+            guard let value = raw as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+            return value.boolValue
+        }
+        var reset: Date?
+        // Match the dashboard's renewal/payer branches and its two-hour reset offset.
+        if field(subscription, "status") as? String == "active", let periodEnd, periodEnd > Date(),
+           let cancelled = boolean(field(subscription, "cancelAtPeriodEnd")),
+           cancelled || boolean(field(subscription, "payerCompatible")) == true,
+           !cancelled || (number(field(subscription, "freeRenewalsRemaining")) ?? 0) > 0 {
+            reset = periodEnd.addingTimeInterval(-7200)
+        }
         var metrics: [UsageMetric] = []
         if let buckets = field(panel, "subscriptionUsageBuckets") as? [String: Any] {
             for (key, title) in [("general", "Agent"), ("orb", "Orb")] {

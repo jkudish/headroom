@@ -31,10 +31,10 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     // Date's payload is inline, unlike ordinary object properties.
     let panel = #"""
     [{"_":1,"q":15},{"user":2,"subscription":4,"subscriptionUsageBuckets":8},
-     {"email":3},"amp@example.test",{"planName":5,"periodEndAt":6},"Gigawatt",
-     ["Date","2026-10-19T00:00:00.000Z"],null,{"general":9,"orb":11},
+     {"email":3},"amp@example.test",{"planName":5,"periodEndAt":6,"status":17,"cancelAtPeriodEnd":18,"freeRenewalsRemaining":19,"payerCompatible":20},"Gigawatt",
+     ["Date","2030-10-19T00:00:00.000Z"],null,{"general":9,"orb":11},
      {"percentRemaining":10},8.9,{"percentRemaining":12},57.3,null,null,
-     {"rjke8/getAccountSettingsPanelData/":16},{"v":1}]
+     {"rjke8/getAccountSettingsPanelData/":16},{"v":1},"active",false,0,true]
     """#
     let encoded = try JSONSerialization.data(withJSONObject: ["type": "result", "data": panel])
     let client = AdditionalClient(http: ProviderHTTP { request in
@@ -58,9 +58,55 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     #expect(result.plan == "Gigawatt")
     #expect(result.metrics.first { $0.title == "Agent" }?.value == 8.9)
     #expect(result.metrics.first { $0.title == "Orb" }?.value == 57.3)
-    #expect(result.metrics.filter { $0.kind == .quota }.allSatisfy { $0.resetsAt == Date(timeIntervalSince1970: 1792368000) })
+    #expect(result.metrics.filter { $0.kind == .quota }.allSatisfy { $0.resetsAt == Date(timeIntervalSince1970: 1918591200) })
     #expect(result.metrics.contains(.init(title: "Individual credits", kind: .balance, value: 17, unit: "USD")))
     #expect(!result.metrics.contains { $0.title == "Agent remaining" || $0.kind == .cap || $0.kind == .note })
+}
+
+@Test(arguments: ["renewing", "free-renewal", "ending", "inactive", "past", "incompatible-payer",
+                  "missing-status", "missing-cancellation", "missing-payer", "missing-free-renewals",
+                  "numeric-cancellation", "numeric-payer", "boolean-free-renewals"])
+func ampResetDatesRequireEstablishedRenewalWithoutDiscardingOtherReadings(_ state: String) async throws {
+    var nodes: [Any] = [
+        ["q": 1], ["rjke8/getAccountSettingsPanelData/": 2], ["v": 3],
+        ["user": 4, "subscription": 6, "subscriptionUsageBuckets": 13],
+        ["email": 5], "amp@example.test",
+        ["planName": 7, "periodEndAt": 8, "status": 9, "cancelAtPeriodEnd": 10,
+         "freeRenewalsRemaining": 11, "payerCompatible": 12],
+        "Gigawatt", ["Date", "2030-10-19T00:00:00.000Z"], "active", false, 0, true,
+        ["general": 14, "orb": 15], ["percentRemaining": 16], ["percentRemaining": 17], 8.9, 57.3
+    ]
+    switch state {
+    case "free-renewal": nodes[10] = true; nodes[11] = 1; nodes[12] = false
+    case "ending": nodes[10] = true
+    case "inactive": nodes[9] = "inactive"
+    case "past": nodes[8] = ["Date", "2020-10-19T00:00:00.000Z"]
+    case "incompatible-payer": nodes[12] = false
+    case "missing-status": nodes[9] = NSNull()
+    case "missing-cancellation": nodes[10] = NSNull()
+    case "missing-payer": nodes[12] = NSNull()
+    case "missing-free-renewals": nodes[10] = true; nodes[11] = NSNull()
+    case "numeric-cancellation": nodes[10] = 0
+    case "numeric-payer": nodes[12] = 1
+    case "boolean-free-renewals": nodes[10] = true; nodes[11] = true
+    default: break
+    }
+    let table = String(decoding: try JSONSerialization.data(withJSONObject: nodes), as: UTF8.self)
+    let encoded = try JSONSerialization.data(withJSONObject: ["type": "result", "data": table])
+    let client = AdditionalClient(http: ProviderHTTP { request in
+        let body = request.url?.path.contains("/remote/") == true ? encoded :
+            Data(#"{"ok":true,"result":{"displayText":"Individual credits: $17 remaining"}}"#.utf8)
+        return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    })
+    let result = try await client.fetch(.init(label: "", provider: .amp), secrets: .init(key: "fixture-amp"))
+    let quotas = result.metrics.filter { $0.kind == .quota }
+    let reset = ["renewing", "free-renewal"].contains(state) ? Date(timeIntervalSince1970: 1918591200) : nil
+    #expect(quotas.count == 2)
+    #expect(quotas.map(\.value) == [8.9, 57.3])
+    #expect(quotas.allSatisfy { $0.resetsAt == reset })
+    #expect(result.reportedEmail == "amp@example.test")
+    #expect(result.plan == "Gigawatt")
+    #expect(result.metrics.first { $0.kind == .balance }?.value == 17)
 }
 
 @Test(arguments: ["denied", "malformed", "invalid-values"])
