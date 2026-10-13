@@ -77,6 +77,40 @@ struct AccountStore: Sendable {
         return try Credential.decode(Data(contentsOf: file))
     }
 
+    func saveSecrets(_ secrets: ConnectionSecrets, for id: UUID) throws {
+        try validateProfile(id)
+        guard !secrets.key.isEmpty,
+              !secrets.key.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+              secrets.key.utf8.count <= 16384 else { throw MonitorError.signInRequired }
+        let data = try JSONEncoder().encode(secrets)
+        let query = secretQuery(id)
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var item = query
+            item[kSecValueData as String] = data
+            item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw MonitorError.keychainUnavailable }
+        } else if status != errSecSuccess { throw MonitorError.keychainUnavailable }
+    }
+
+    func secrets(_ id: UUID, allowInteraction: Bool = false) throws -> ConnectionSecrets {
+        try validateProfile(id)
+        var query = secretQuery(id)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let context = LAContext()
+        context.interactionNotAllowed = !allowInteraction
+        query[kSecUseAuthenticationContext as String] = context
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { throw MonitorError.signInRequired }
+        guard status == errSecSuccess, let data = item as? Data,
+              let secrets = try? JSONDecoder().decode(ConnectionSecrets.self, from: data) else {
+            throw MonitorError.keychainUnavailable
+        }
+        return secrets
+    }
+
     func helperEnvironment(_ id: UUID) throws -> [String: String] {
         try prepare(id)
         let home = profile(id).deletingLastPathComponent().appendingPathComponent("home").path
@@ -99,6 +133,8 @@ struct AccountStore: Sendable {
         try validateProfile(id)
         let status = SecItemDelete(keychainQuery(id) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw MonitorError.keychainUnavailable }
+        let secretStatus = SecItemDelete(secretQuery(id) as CFDictionary)
+        guard secretStatus == errSecSuccess || secretStatus == errSecItemNotFound else { throw MonitorError.keychainUnavailable }
         let directory = profile(id).deletingLastPathComponent()
         if FileManager.default.fileExists(atPath: directory.path) {
             try FileManager.default.removeItem(at: directory)
@@ -108,6 +144,13 @@ struct AccountStore: Sendable {
     private func keychainQuery(_ id: UUID) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: keychainService(id), kSecAttrAccount as String: NSUserName()]
+    }
+
+    private func secretQuery(_ id: UUID) -> [String: Any] {
+        let scope = SHA256.hash(data: Data(root.path.utf8)).map { String(format: "%02x", $0) }.joined()
+        return [kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: "dev.jkudish.usage-monitor-poc.keys.\(scope)",
+                kSecAttrAccount as String: id.uuidString]
     }
 
     private func validateProfile(_ id: UUID) throws {

@@ -31,17 +31,45 @@ import Testing
         async let first = client.fetch(a)
         async let second = client.fetch(b)
         let (alice, bob) = try await (first, second)
-        #expect(alice.identity?.accountID == "workspace-a")
+        #expect(alice.identity?.accountID == "person-not-workspace")
         #expect(alice.identity?.organizationID == "workspace-a")
         #expect(alice.identity?.email == "alice@example.test")
         #expect(alice.identity?.name == "Alice team")
         #expect(alice.metrics.first?.value == 76.5)
         #expect(alice.metrics.first?.resetsAt == Date(timeIntervalSince1970: 1791909000))
-        #expect(bob.identity?.accountID == "workspace-b")
+        #expect(bob.identity?.accountID == "person-not-workspace")
+        #expect(bob.identity?.organizationID == "workspace-b")
         #expect(bob.identity?.email == "bob@example.test")
         #expect(bob.metrics.first?.value == 9)
         #expect(alice.metrics.count == 1)
         await #expect(throws: MonitorError.signInRequired) { try await client.fetch(absent) }
+    }
+
+    @Test @MainActor func codexPeopleInOneWorkspaceStaySeparateAndCannotSwapAfterRestart() async throws {
+        let store = try subscriptionStore()
+        defer { try? FileManager.default.removeItem(at: store.root) }
+        let a = Account(label: "", provider: .codex), b = Account(label: "", provider: .codex)
+        try store.save([a, b])
+        let tokenA = try writeCodexAuth(store, a.id, workspace: "shared", email: "alice@example.test", humanID: "alice")
+        _ = try writeCodexAuth(store, b.id, workspace: "shared", email: "bob@example.test", humanID: "bob")
+        let client = CodexClient(store: store, http: ProviderHTTP { request in
+            #expect(request.value(forHTTPHeaderField: "ChatGPT-Account-Id") == "shared")
+            if request.url?.lastPathComponent == "accounts" { return subscriptionResponse(request, "", status: 404) }
+            let alice = request.value(forHTTPHeaderField: "Authorization") == "Bearer \(tokenA)"
+            return subscriptionResponse(request, "{\"rate_limit\":{\"primary_window\":{\"used_percent\":\(alice ? 19 : 83)}}}")
+        })
+        let monitor = try Monitor(store: store, fetch: { try await client.fetch($0) })
+        await monitor.refresh(a.id)
+        await monitor.refresh(b.id)
+        #expect(monitor.entries.map { $0.snapshot?.metrics.first?.value } == [81, 17])
+        #expect(try store.load().map { $0.identity?.accountID } == ["alice", "bob"])
+        let restarted = try Monitor(store: store, fetch: { try await client.fetch($0) })
+        _ = try writeCodexAuth(store, a.id, workspace: "shared", email: "bob@example.test", humanID: "bob")
+        await restarted.refresh(a.id)
+        #expect(restarted.entries[0].snapshot == nil)
+        #expect(restarted.entries[0].error == MonitorError.identityChanged.localizedDescription)
+        await restarted.refresh(b.id)
+        #expect(restarted.entries[1].snapshot?.metrics.first?.value == 17)
     }
 
     @Test func codexMissingProfileNeverSendsOrFallsBackToAmbientCredentials() async throws {
@@ -122,7 +150,7 @@ import Testing
         #expect(throws: MonitorError.invalidProfile) { try CodexAuth.environment(a, store: store) }
     }
 
-    @Test(arguments: ["expired", "no-expiry", "wrong-workspace", "no-workspace", "bad-jwt", "api-key"])
+    @Test(arguments: ["expired", "no-expiry", "wrong-workspace", "no-workspace", "no-user", "bad-jwt", "api-key"])
     func codexRejectsUnusableTokensWithoutRefreshing(_ scenario: String) async throws {
         let store = try subscriptionStore()
         defer { try? FileManager.default.removeItem(at: store.root) }
@@ -130,7 +158,7 @@ import Testing
         let expiry: Double? = scenario == "no-expiry" ? nil : scenario == "expired" ? 1 : 4102444800
         _ = try writeCodexAuth(store, id, workspace: "selected", email: "person@example.test", expiry: expiry,
                               claimWorkspace: scenario == "wrong-workspace" ? "other" : scenario == "no-workspace" ? "" : nil,
-                              mode: scenario)
+                              mode: scenario, humanID: scenario == "no-user" ? "" : "person-not-workspace")
         let http = ProviderHTTP { _ in
             Issue.record("Invalid auth must not send usage or token-refresh requests")
             throw MonitorError.network
@@ -155,6 +183,7 @@ import Testing
         }
         let result = try await CodexClient(store: store, http: http).fetch(id)
         #expect(result.metrics.filter { $0.kind == .quota }.map(\.value) == [32, 92.239])
+        #expect(result.metrics.first?.title == "Weekly")
         #expect(result.metrics.first?.resetsAt == Date(timeIntervalSince1970: 1792342800))
         #expect(result.metrics.first { $0.kind == .balance }?.value == 1234.5)
         #expect(result.metrics.first { $0.kind == .spend }?.value == 7761)
@@ -303,11 +332,12 @@ private func fixtureJWT(_ claims: [String: Any]) throws -> String {
 
 @discardableResult
 private func writeCodexAuth(_ store: AccountStore, _ id: UUID, workspace: String, email: String,
-                            expiry: Double? = 4102444800, claimWorkspace: String? = nil, mode: String = "") throws -> String {
+                            expiry: Double? = 4102444800, claimWorkspace: String? = nil, mode: String = "",
+                            humanID: String = "person-not-workspace") throws -> String {
     try store.prepare(id)
     var claims: [String: Any] = [
         "https://api.openai.com/auth": ["chatgpt_account_id": claimWorkspace ?? workspace,
-                                      "chatgpt_user_id": "person-not-workspace",
+                                      "chatgpt_user_id": humanID,
                                       "organizations": [["id": "decoy", "is_default": true], ["id": workspace]]],
         "https://api.openai.com/profile": ["email": email]
     ]

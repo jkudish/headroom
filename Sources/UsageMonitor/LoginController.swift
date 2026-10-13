@@ -5,6 +5,8 @@ import Observation
 final class LoginController {
     private(set) var accountID: UUID?
     private(set) var authorizationURL: URL?
+    private(set) var deviceCode: String?
+    private(set) var provider: Provider = .claude
     private(set) var error: String?
     private(set) var submitted = false
     private var process: Process?
@@ -13,21 +15,24 @@ final class LoginController {
     private var buffer = ""
     private var attempt: UUID?
 
-    func start(_ id: UUID, store: AccountStore, completion: @escaping @MainActor (UUID) -> Void) throws {
+    func start(_ id: UUID, provider: Provider = .claude, store: AccountStore,
+               completion: @escaping @MainActor (UUID) -> Void) throws {
         guard process == nil else { throw MonitorError.loginBusy }
-        let paths = [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/claude").path,
-                     "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
+        guard provider.usesHelper else { throw MonitorError.invalidProfile }
+        let helper = provider == .codex ? "codex" : "claude"
+        let paths = [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/\(helper)").path,
+                     "/opt/homebrew/bin/\(helper)", "/usr/local/bin/\(helper)"]
         guard let executable = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-            throw MonitorError.helperMissing
+            throw MonitorError.unsupported("Install \(provider.title)'s official CLI at ~/.local/bin/\(helper) or with Homebrew.")
         }
         let process = Process()
         let input = Pipe()
         let output = Pipe()
         let attempt = UUID()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = ["auth", "login", "--claudeai"]
-        process.environment = try store.helperEnvironment(id)
-        process.currentDirectoryURL = store.profile(id).deletingLastPathComponent()
+        process.arguments = provider == .codex ? CodexAuth.loginArguments : ["auth", "login", "--claudeai"]
+        process.environment = try provider == .codex ? CodexAuth.environment(id, store: store) : store.helperEnvironment(id)
+        process.currentDirectoryURL = store.profile(id)
         process.standardInput = input
         process.standardOutput = output
         process.standardError = output
@@ -49,8 +54,10 @@ final class LoginController {
         self.input = input
         self.output = output
         self.attempt = attempt
+        self.provider = provider
         accountID = id
         authorizationURL = nil
+        deviceCode = nil
         error = nil
         submitted = false
         do { try process.run() }
@@ -59,7 +66,7 @@ final class LoginController {
 
     func submit(_ code: String) throws {
         let code = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !submitted, process?.isRunning == true, let input,
+        guard provider == .claude, !submitted, process?.isRunning == true, let input,
               !code.isEmpty, code.utf8.count <= 4096,
               code.range(of: #"^[A-Za-z0-9_.\-#]+$"#, options: .regularExpression) != nil else {
             throw MonitorError.invalidCode
@@ -88,6 +95,7 @@ final class LoginController {
         output = nil
         accountID = nil
         authorizationURL = nil
+        deviceCode = nil
         submitted = false
         buffer = ""
     }
@@ -96,14 +104,32 @@ final class LoginController {
         guard self.attempt == attempt, !submitted else { return }
         buffer += String(decoding: data, as: UTF8.self)
         buffer = String(buffer.suffix(32768))
-        // Keep the helper's complete first-party URL, including its PKCE challenge and state.
-        // Neither helper output nor codes are logged or saved.
+        guard let prompt = LoginPrompt.parse(buffer, provider: provider) else { return }
+        authorizationURL = prompt.url
+        deviceCode = prompt.deviceCode
+    }
+}
+
+struct LoginPrompt {
+    let url: URL
+    let deviceCode: String?
+
+    static func parse(_ output: String, provider: Provider) -> Self? {
+        let buffer = output.replacingOccurrences(of: #"\x{1B}\[[0-9;]*[A-Za-z]"#, with: "", options: .regularExpression)
+        if provider == .codex {
+            guard buffer.range(of: #"(?m)^\s*https://auth\.openai\.com/codex/device\s*$"#, options: .regularExpression) != nil,
+                  let marker = buffer.range(of: "Enter this one-time code"),
+                  let code = buffer[marker.upperBound...].range(of: #"\b[A-Z0-9]{4}-[A-Z0-9]{5}\b"#, options: .regularExpression) else { return nil }
+            return Self(url: URL(string: "https://auth.openai.com/codex/device")!, deviceCode: String(buffer[code]))
+        }
+        guard provider == .claude else { return nil }
+        // Keep the helper's full PKCE URL. Never log or persist output or codes.
         let pattern = #"https://(?:claude\.com/cai|claude\.ai)/oauth/authorize\?[^\s\x{1B}]+(?=\r?\n)"#
         guard let range = buffer.range(of: pattern, options: .regularExpression),
               let url = URL(string: String(buffer[range])),
               let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
               parts.queryItems?.first(where: { $0.name == "client_id" })?.value == "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-              parts.queryItems?.contains(where: { $0.name == "state" && $0.value?.isEmpty == false }) == true else { return }
-        authorizationURL = url
+              parts.queryItems?.contains(where: { $0.name == "state" && $0.value?.isEmpty == false }) == true else { return nil }
+        return Self(url: url, deviceCode: nil)
     }
 }

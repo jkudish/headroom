@@ -18,6 +18,22 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     let codex = try JSONDecoder().decode(Account.self, from: response("{\"id\":\"\(id)\",\"label\":\"Work\",\"provider\":\"codex\"}"))
     let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(codex)) as? [String: Any])
     #expect(encoded["provider"] as? String == "codex")
+    let unnamed = Account(label: "", identity: .init(accountID: "org", organizationID: "org", email: ""), provider: .parallel)
+    #expect(unnamed.displayName == "New Parallel account")
+}
+
+@Test func enteredKeysStayOutOfMetadataAndSeparateAcrossAccounts() throws {
+    let store = try temporaryStore()
+    let a = Account(label: "A", provider: .openRouter), b = Account(label: "B", provider: .openRouter)
+    defer { try? store.deleteProfile(a.id); try? store.deleteProfile(b.id); try? FileManager.default.removeItem(at: store.root) }
+    try store.save([a, b])
+    try store.saveSecrets(.init(key: "fixture-private-key-a"), for: a.id)
+    #expect(try store.secrets(a.id).key == "fixture-private-key-a")
+    #expect(throws: MonitorError.signInRequired) { try store.secrets(b.id) }
+    let metadata = try String(contentsOf: store.root.appendingPathComponent("accounts.json"), encoding: .utf8)
+    #expect(!metadata.contains("fixture-private-key-a"))
+    try store.deleteProfile(a.id)
+    #expect(throws: MonitorError.signInRequired) { try store.secrets(a.id) }
 }
 
 @Test func metersUseRemainingPercentAndCentsWithoutInventingMissingLimits() throws {
@@ -161,6 +177,20 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(try store.load().isEmpty)
 }
 
+@Test @MainActor func aBoundAccountCannotLoseItsIdentityOnRefresh() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let account = Account(label: "Work", identity: .init(accountID: "alice", organizationID: "org", email: "alice@example.test"), provider: .openRouter)
+    try store.save([account])
+    let monitor = try Monitor(store: store, fetch: { _ in
+        UsageSnapshot(metrics: [.init(title: "Spend", kind: .spend, value: 7, unit: "USD")])
+    })
+    await monitor.refresh(account.id)
+    #expect(monitor.entries[0].snapshot == nil)
+    #expect(monitor.entries[0].error == MonitorError.invalidResponse.localizedDescription)
+    #expect(try store.load()[0].identity?.accountID == "alice")
+}
+
 @Test func clientKeepsSelectedAccountCredentialsAndProfileTogether() async throws {
     let a = UUID(), b = UUID()
     let client = ClaudeClient(credentials: { id in
@@ -193,6 +223,16 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(throws: MonitorError.missingScope) {
         try Credential.decode(response("{\"claudeAiOauth\":{\"accessToken\":\"fixture\",\"scopes\":[\"user:inference\"]}}"))
     }
+}
+
+@Test func officialDevicePromptKeepsTheFullCodeAndRejectsOtherHosts() throws {
+    let text = "Open this link\nhttps://auth.openai.com/codex/device\nEnter this one-time code\nABCD-EF123\n"
+    let prompt = try #require(LoginPrompt.parse(text, provider: .codex))
+    #expect(prompt.url.absoluteString == "https://auth.openai.com/codex/device")
+    #expect(prompt.deviceCode == "ABCD-EF123")
+    #expect(LoginPrompt.parse(text.replacingOccurrences(of: "auth.openai.com", with: "evil.example"), provider: .codex) == nil)
+    #expect(LoginPrompt.parse(text.replacingOccurrences(of: "ABCD-EF123", with: "ABCD-EF12"), provider: .codex) == nil)
+    #expect(LoginPrompt.parse(text.replacingOccurrences(of: "codex/device", with: "codex/device?redirect=evil"), provider: .codex) == nil)
 }
 
 @Test @MainActor func startingLoginInvalidatesAnEarlierRefresh() async throws {

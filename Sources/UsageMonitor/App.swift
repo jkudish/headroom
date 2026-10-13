@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var status: NSStatusItem?
     private var popover: NSPopover?
     private var window: NSWindow?
+    private var connectionWindow: NSWindow?
     private var monitor: Monitor?
     private let login = LoginController()
     private var demoRoot: URL?
@@ -30,13 +31,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let root = FileManager.default.temporaryDirectory.appendingPathComponent("usage-monitor-demo-\(UUID().uuidString)")
                 demoRoot = root
                 store = try AccountStore(root: root)
-                try store.save([Account(label: "Personal"), Account(label: "Work")])
-                let ids = try store.load().map(\.id)
-                monitor = try Monitor(store: store, fetch: { id in try Self.demoSnapshot(work: id == ids[1]) })
+                let accounts = [Account(label: "Personal"), Account(label: "Work"),
+                                Account(label: "Codex personal", provider: .codex),
+                                Account(label: "Amp work", provider: .amp),
+                                Account(label: "OpenRouter wallet", provider: .openRouter)]
+                try store.save(accounts)
+                monitor = try Monitor(store: store, fetch: { id in
+                    guard let account = accounts.first(where: { $0.id == id }) else { throw MonitorError.invalidProfile }
+                    return try Self.demoSnapshot(account)
+                })
             } else {
                 store = try AccountStore.local()
-                let client = ClaudeClient(store: store)
-                monitor = try Monitor(store: store, fetch: { try await client.fetch($0) })
+                monitor = try Monitor(store: store, fetch: { try await Self.fetch($0, store: store) })
             }
             guard let monitor else { return }
             let popover = NSPopover()
@@ -63,7 +69,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func view(_ monitor: Monitor) -> MonitorView {
-        MonitorView(monitor: monitor, login: login, demo: demo, openWindow: { [weak self] in self?.openWindow() })
+        MonitorView(monitor: monitor, login: login, demo: demo,
+                    openWindow: { [weak self] in self?.openWindow() },
+                    connect: { [weak self] provider, account in self?.openConnection(provider, account: account) })
+    }
+
+    private func openConnection(_ provider: Provider, account: Account?) {
+        guard let monitor else { return }
+        openWindow()
+        guard connectionWindow == nil, let window else { return }
+        let form = ConnectionView(monitor: monitor, provider: provider, account: account, demo: demo) { [weak self] in
+            guard let self, let sheet = self.connectionWindow else { return }
+            self.window?.endSheet(sheet)
+            self.connectionWindow = nil
+        }
+        let content = NSHostingView(rootView: form)
+        let sheet = NSWindow(contentRect: NSRect(origin: .zero, size: content.fittingSize),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        sheet.title = provider.title
+        sheet.contentView = makeMonitorPanel(content)
+        sheet.isReleasedWhenClosed = false
+        connectionWindow = sheet
+        window.beginSheet(sheet)
+    }
+
+    nonisolated private static func fetch(_ id: UUID, store: AccountStore) async throws -> UsageSnapshot {
+        guard let account = try store.load().first(where: { $0.id == id }) else { throw MonitorError.signInRequired }
+        if account.provider == .claude { return try await ClaudeClient(store: store).fetch(id) }
+        if account.provider == .codex { return try await CodexClient(store: store).fetch(id) }
+        let secrets = try store.secrets(id)
+        switch account.provider {
+        case .zai: return try await ZaiClient().fetch(account, secrets: secrets)
+        case .openRouter, .searchAPI, .dataForSEO, .firecrawl, .openAIAPI, .anthropicAPI:
+            return try await BillingClient().fetch(account, secrets: secrets)
+        default: return try await AdditionalClient().fetch(account, secrets: secrets)
+        }
     }
 
     @objc private func togglePopover() {
@@ -96,7 +136,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let demoRoot { try? FileManager.default.removeItem(at: demoRoot) }
     }
 
-    nonisolated private static func demoSnapshot(work: Bool) throws -> UsageSnapshot {
+    nonisolated static func demoSnapshot(_ account: Account) throws -> UsageSnapshot {
+        let reset = Date().addingTimeInterval(36 * 3600)
+        switch account.provider {
+        case .codex:
+            return UsageSnapshot(metrics: [.init(title: "5-hour", kind: .quota, value: 8, resetsAt: reset),
+                                           .init(title: "Weekly", kind: .quota, value: 63, resetsAt: reset),
+                                           .init(title: "Credit balance", kind: .balance, value: 178.5, unit: "credits")])
+        case .amp:
+            return UsageSnapshot(metrics: [.init(title: "Agent remaining", kind: .balance, value: 18.57, unit: "USD"),
+                                           .init(title: "Orb remaining", kind: .count, value: 732.8, unit: "a1.small hours"),
+                                           .init(title: "Individual credits", kind: .balance, value: 31.25, unit: "USD")])
+        case .openRouter:
+            return UsageSnapshot(metrics: [.init(title: "Wallet credits", kind: .balance, value: 37.82, unit: "USD")])
+        default: break
+        }
+        let work = account.label == "Work"
         let data = Data("""
         {"five_hour":{"utilization":\(work ? 90 : 23.5),"resets_at":"2030-10-13T16:30:00Z"},
          "seven_day":{"utilization":\(work ? 100 : 42),"resets_at":"2030-10-18T09:00:00Z"},

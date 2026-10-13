@@ -29,7 +29,9 @@ struct Account: Codable, Identifiable, Equatable, Sendable {
 
     var displayName: String {
         if !label.isEmpty { return label }
-        return identity?.name ?? identity?.email ?? "New \(provider.title) account"
+        if let name = identity?.name, !name.isEmpty { return name }
+        if let email = identity?.email, !email.isEmpty { return email }
+        return "New \(provider.title) account"
     }
 }
 
@@ -76,17 +78,7 @@ struct ClaudeUsage: Decodable, Sendable {
         }
 
         func formattedReset(timeZone: TimeZone = .current) -> String? {
-            guard let date = resetDate else { return nil }
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = timeZone
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US")
-            formatter.timeZone = timeZone
-            formatter.dateFormat = calendar.component(.minute, from: date) == 0
-                ? "EEE MMM d 'at' ha" : "EEE MMM d 'at' h:mma"
-            formatter.amSymbol = "am"
-            formatter.pmSymbol = "pm"
-            return formatter.string(from: date)
+            resetDate?.usageResetText(timeZone: timeZone)
         }
     }
 
@@ -103,6 +95,21 @@ struct ClaudeUsage: Decodable, Sendable {
 
         var spent: Double? { usedCredits.flatMap { $0 >= 0 && $0.isFinite ? $0 / 100 : nil } }
         var cap: Double? { monthlyLimit.flatMap { $0 >= 0 && $0.isFinite ? $0 / 100 : nil } }
+    }
+}
+
+extension Date {
+    func usageResetText(timeZone: TimeZone = .current) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = calendar.component(.minute, from: self) == 0
+            ? "EEE MMM d 'at' ha" : "EEE MMM d 'at' h:mma"
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
+        return formatter.string(from: self)
     }
 }
 
@@ -177,7 +184,7 @@ enum MonitorError: Error, LocalizedError, Equatable {
         case .http(let status): "Usage request failed (HTTP \(status))."
         case .network: "Could not reach the provider. Check your connection and retry."
         case .helperMissing: "Install Claude Code at ~/.local/bin/claude, /opt/homebrew/bin/claude, or /usr/local/bin/claude."
-        case .helperFailed: "Claude Code sign-in did not finish. Retry the login."
+        case .helperFailed: "Provider sign-in did not finish. Retry the login."
         case .loginBusy: "Finish or cancel the current sign-in first."
         case .invalidCode: "Paste the authorization code shown by Claude, not an API key or URL."
         case .unsupported(let message): message

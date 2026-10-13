@@ -25,9 +25,8 @@ struct CodexClient: Sendable {
             if selected.count == 1 { name = selected.first?.name }
         }
         return UsageSnapshot(identity: AccountIdentity(
-            // OpenAI uses chatgpt_account_id for both account and workspace identity.
-            // Never substitute chatgpt_user_id or the first/default organization.
-            accountID: credential.workspace, organizationID: credential.workspace,
+            // Owner is the human/workspace pair; the request header stays workspace-only.
+            accountID: credential.user, organizationID: credential.workspace,
             email: credential.email ?? "Email unavailable", name: name
         ), metrics: metrics)
     }
@@ -128,6 +127,7 @@ private enum CodexProfile {
 private struct CodexCredential {
     let token: String
     let workspace: String
+    let user: String
     let email: String?
 
     static func decode(_ data: Data) throws -> Self {
@@ -146,7 +146,9 @@ private struct CodexCredential {
         if let selected = file.tokens.account_id, selected != workspace { throw MonitorError.identityChanged }
         let identity = file.tokens.id_token.flatMap { try? CodexClaims.decode($0) }
         if let other = identity?.workspace, other != workspace { throw MonitorError.identityChanged }
-        return Self(token: file.tokens.access_token, workspace: workspace,
+        if let user = access.user, let other = identity?.user, user != other { throw MonitorError.identityChanged }
+        guard let user = identity?.user ?? access.user, safeHeader(user) else { throw MonitorError.signInRequired }
+        return Self(token: file.tokens.access_token, workspace: workspace, user: user,
                     email: identity?.email ?? identity?.profile?.email ?? access.email ?? access.profile?.email)
     }
 
@@ -156,7 +158,11 @@ private struct CodexCredential {
 }
 
 private struct CodexClaims: Decodable {
-    struct Auth: Decodable { let chatgpt_account_id: String? }
+    struct Auth: Decodable {
+        let chatgpt_account_id: String?
+        let chatgpt_user_id: String?
+        let user_id: String?
+    }
     struct Profile: Decodable { let email: String? }
     let exp: Double?
     let email: String?
@@ -164,6 +170,7 @@ private struct CodexClaims: Decodable {
     let auth: Auth?
     let profile: Profile?
     var workspace: String? { auth?.chatgpt_account_id ?? chatgpt_account_id }
+    var user: String? { auth?.chatgpt_user_id ?? auth?.user_id }
     enum CodingKeys: String, CodingKey {
         case exp, email, chatgpt_account_id
         case auth = "https://api.openai.com/auth", profile = "https://api.openai.com/profile"
@@ -195,7 +202,8 @@ private struct CodexUsage: Decodable {
         func metric(_ fallback: String) throws -> UsageMetric {
             guard (0...100).contains(used_percent) else { throw MonitorError.invalidResponse }
             let title: String
-            if let seconds = limit_window_seconds, seconds > 0 {
+            if limit_window_seconds == 604800 { title = "Weekly" }
+            else if let seconds = limit_window_seconds, seconds > 0 {
                 title = seconds % 3600 == 0 ? "\(seconds / 3600)-hour" : "\(seconds)-second"
             } else { title = fallback }
             return .init(title: title, kind: .quota, value: 100 - used_percent,

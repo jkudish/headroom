@@ -6,6 +6,7 @@ struct MonitorView: View {
     @Bindable var login: LoginController
     let demo: Bool
     let openWindow: () -> Void
+    let connect: (Provider, Account?) -> Void
     @State private var renaming: UUID?
     @State private var editedLabel = ""
     @State private var code = ""
@@ -19,7 +20,7 @@ struct MonitorView: View {
                 Image(systemName: "gauge.with.dots.needle.50percent").font(.title2)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Usage Monitor").font(.title3.weight(.semibold))
-                    Text("Claude subscriptions · \(monitor.entries.count) \(monitor.entries.count == 1 ? "account" : "accounts")")
+                    Text("\(monitor.entries.count) independent \(monitor.entries.count == 1 ? "connection" : "connections")")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -36,24 +37,30 @@ struct MonitorView: View {
                     if monitor.entries.isEmpty {
                         VStack(spacing: 10) {
                             Image(systemName: "person.crop.circle.badge.plus").font(.system(size: 34)).foregroundStyle(.secondary)
-                            Text("All your Claude accounts, separately.").font(.headline)
-                            Text("Add an account and sign in through Claude Code. Your existing CLI login stays untouched.")
+                            Text("All your accounts, separately.").font(.headline)
+                            Text("Connect a subscription or API account. Your existing CLI logins stay untouched.")
                                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }.frame(maxWidth: .infinity).padding(.vertical, 26)
                     }
-                    ForEach(monitor.entries) { entry in accountCard(entry) }
                     if login.accountID != nil { loginCard }
+                    ForEach(monitor.entries) { entry in accountCard(entry) }
                     if let message = error ?? login.error {
                         Label(message, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Divider()
-                    Button("Add Claude account", systemImage: "plus") {
-                        perform {
-                            let id = try monitor.add(label: "")
-                            startLogin(id)
+                    Menu {
+                        ForEach(Provider.allCases.filter(\.supportsRead)) { provider in
+                            Button(provider.title) { addProvider(provider) }
                         }
-                    }.disabled(demo || login.accountID != nil).accessibilityIdentifier("addAccount")
+                        Divider()
+                        Menu("Dashboard only — not connected yet") {
+                            ForEach(Provider.allCases.filter { !$0.supportsRead }) { provider in
+                                Button(provider.title) { connect(provider, nil) }
+                            }
+                        }
+                    } label: { Label("Add account", systemImage: "plus") }
+                        .disabled(login.accountID != nil).accessibilityIdentifier("addAccount")
                 }.padding(18)
             }
             Divider()
@@ -73,37 +80,43 @@ struct MonitorView: View {
                 if let id = renaming { perform { try monitor.rename(id, label: editedLabel) } }
                 renaming = nil
             }
-        } message: { Text("Leave blank to use the name from your Claude account.") }
+        } message: { Text("Leave blank to use the name returned by the provider, when available.") }
         .alert("Remove this account?", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } })) {
             Button("Cancel", role: .cancel) { removal = nil }
             Button("Remove", role: .destructive) {
                 if let id = removal { perform { try monitor.remove(id) } }
                 removal = nil
             }
-        } message: { Text("Delete only this app's saved profile and scoped credentials. Other Claude logins stay untouched.") }
+        } message: { Text("Delete only this app's saved profile and scoped credentials. Other logins stay untouched.") }
         .onChange(of: login.accountID) { _, _ in code = "" }
     }
 
     private func accountCard(_ entry: AccountEntry) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
-                if let url = Bundle.module.url(forResource: "claude-logo", withExtension: "png"),
+                if entry.account.provider == .claude,
+                   let url = Bundle.module.url(forResource: "claude-logo", withExtension: "png"),
                    let image = NSImage(contentsOf: url) {
                     Image(nsImage: image).resizable().interpolation(.high)
                         .scaledToFit().frame(width: 22, height: 22).accessibilityLabel("Claude")
+                } else {
+                    Text(String(entry.account.provider.title.prefix(1))).font(.headline)
+                        .frame(width: 22, height: 22).background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+                        .accessibilityLabel(entry.account.provider.title)
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(entry.account.displayName).font(.headline).lineLimit(1).truncationMode(.middle)
-                    if entry.account.identity?.email != entry.account.displayName {
-                        Text(entry.account.identity?.email ?? "Not connected")
-                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text(entry.account.provider.title).font(.caption).foregroundStyle(.secondary)
+                    if let email = entry.account.identity?.email, !email.isEmpty, email != entry.account.displayName {
+                        Text(email).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     }
                 }
                 Spacer()
                 if entry.refreshing { ProgressView().controlSize(.small) }
                 Menu {
                     Button("Rename account…") { editedLabel = entry.account.label; renaming = entry.id }
-                    Button("Sign in again") { startLogin(entry.id) }
+                    Button("Reconnect account…") { reconnect(entry.account) }
+                    Link("Provider dashboard", destination: entry.account.provider.dashboardURL)
                     Button("Remove account", role: .destructive) { removal = entry.id }
                 } label: { Image(systemName: "ellipsis") }
                 .menuStyle(.borderlessButton).fixedSize().disabled(demo || login.accountID != nil)
@@ -124,17 +137,17 @@ struct MonitorView: View {
                     Label(message, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text("Usage unavailable until this account signs in.").font(.callout).foregroundStyle(.secondary)
+                    Text("Usage unavailable until this account connects.").font(.callout).foregroundStyle(.secondary)
                 }
                 HStack {
-                    Button("Sign in with Claude") { startLogin(entry.id) }
+                    Button(entry.account.provider.usesHelper ? "Sign in" : "Enter credentials") { reconnect(entry.account) }
                     Button("Refresh") { Task { await monitor.refresh(entry.id) } }
                     if entry.error == MonitorError.keychainUnavailable.localizedDescription {
                         Button("Allow Keychain access") { grantAccess(entry.id) }
                     }
                 }.disabled(demo || entry.refreshing || login.accountID != nil || granting != nil)
                 if entry.error == MonitorError.keychainUnavailable.localizedDescription {
-                    Text("Allow access only to this app's scoped Claude Code entry. Choose Always Allow to enable later usage checks.")
+                    Text("Allow access only to this connection's Keychain entry. Choose Always Allow to enable later usage checks.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -146,8 +159,7 @@ struct MonitorView: View {
 
     @ViewBuilder private func metricRow(_ metric: UsageMetric) -> some View {
         if metric.kind == .quota {
-            meter(metric.title, window: .init(utilization: metric.value.map { 100 - $0 },
-                                           resetsAt: metric.resetsAt.map { ISO8601DateFormatter().string(from: $0) }))
+            meter(metric)
         } else {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
@@ -162,72 +174,65 @@ struct MonitorView: View {
                         Text("Unavailable").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                if let detail = metric.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+                if let reset = metric.resetsAt {
+                    Text("Resets \(reset.usageResetText())").font(.caption).foregroundStyle(.secondary)
+                }
+                if let detail = metric.detail { Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(2).help(detail) }
             }
         }
     }
 
-    private func meter(_ title: String, window: ClaudeUsage.Window?) -> some View {
+    private func meter(_ metric: UsageMetric) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 10) {
-                Text(title).font(.callout.weight(.medium)).frame(width: 58, alignment: .leading)
-                if let remaining = window?.remaining {
-                    let color = window?.remainingColor ?? .secondary
-                    GeometryReader { geometry in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(color.opacity(0.15))
-                            Capsule().fill(color).frame(width: geometry.size.width * remaining / 100)
-                        }
-                    }.frame(height: 6)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(title) remaining").accessibilityValue("\(remaining) percent")
+                Text(metric.title).font(.callout.weight(.medium)).lineLimit(1)
+                Spacer(minLength: 6)
+                if let remaining = metric.value, remaining.isFinite, (0...100).contains(remaining) {
                     Text("\(remaining.formatted(.number.precision(.fractionLength(0...1))))% left")
-                        .font(.callout.monospacedDigit()).foregroundStyle(color).frame(width: 78, alignment: .trailing)
+                        .font(.callout.monospacedDigit()).foregroundStyle(metric.remainingColor)
                 } else {
-                    Spacer()
                     Text("Unavailable").font(.callout).foregroundStyle(.secondary)
                 }
             }
-            if let reset = window?.resetDate {
-                Text(reset <= Date() ? "Reset time passed — refresh to update" : "Resets \(window?.formattedReset() ?? "")")
+            if let remaining = metric.value, remaining.isFinite, (0...100).contains(remaining) {
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(metric.remainingColor.opacity(0.15))
+                        Capsule().fill(metric.remainingColor).frame(width: geometry.size.width * remaining / 100)
+                    }
+                }.frame(height: 6)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(metric.title) remaining").accessibilityValue("\(remaining) percent")
+            }
+            if let reset = metric.resetsAt {
+                Text(reset <= Date() ? "Reset time passed — refresh to update" : "Resets \(reset.usageResetText())")
                     .font(.caption).foregroundStyle(.secondary)
             } else { Text("Reset time unavailable").font(.caption).foregroundStyle(.secondary) }
         }
     }
 
-    @ViewBuilder private func extraUsage(_ extra: ClaudeUsage.ExtraUsage?) -> some View {
-        if extra?.isEnabled == false {
-            Text("Extra usage disabled").font(.caption).foregroundStyle(.secondary)
-        } else if let extra, extra.isEnabled == true, let spent = extra.spent {
-            let currency = extra.currency ?? "USD"
-            HStack {
-                Text("Extra usage").font(.caption)
-                Spacer()
-                if let cap = extra.cap {
-                    Text("\(spent.formatted(.currency(code: currency))) / \(cap.formatted(.currency(code: currency))) monthly cap")
-                        .font(.caption.monospacedDigit())
-                } else {
-                    Text("\(spent.formatted(.currency(code: currency))) spent · cap unavailable").font(.caption.monospacedDigit())
-                }
-            }.foregroundStyle(.secondary)
-        } else { Text("Extra usage unavailable").font(.caption).foregroundStyle(.secondary) }
-    }
-
     private var loginCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Sign in: \(monitor.entries.first(where: { $0.id == login.accountID })?.account.displayName ?? "Claude")").font(.headline)
-            Text("Open this link in the browser profile for the account you want. Complete Claude's sign-in, then paste its code below if asked.")
+            Text(login.provider == .codex
+                 ? "Open this link in the browser profile for the account you want. Enter the device code on OpenAI's page; this app waits for approval. Enable device code authorization in ChatGPT security settings if needed."
+                 : "Open this link in the browser profile for the account you want. Complete Claude's sign-in, then paste its code below if asked.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let url = login.authorizationURL {
                 HStack {
-                    Link("Open Claude sign-in", destination: url)
+                    Link("Open \(login.provider.title) sign-in", destination: url)
                     Button("Copy login link") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.absoluteString, forType: .string) }
                 }
-                SecureField("Authorization code", text: $code).textFieldStyle(.roundedBorder).accessibilityIdentifier("authorizationCode")
-                Button("Complete sign-in") { perform { try login.submit(code); code = "" } }
-                    .disabled(code.isEmpty)
+                if let deviceCode = login.deviceCode {
+                    Text(deviceCode).font(.title2.monospaced().weight(.semibold)).textSelection(.enabled)
+                    HStack { ProgressView().controlSize(.small); Text("Waiting for browser approval…") }
+                } else {
+                    SecureField("Authorization code", text: $code).textFieldStyle(.roundedBorder).accessibilityIdentifier("authorizationCode")
+                    Button("Complete sign-in") { perform { try login.submit(code); code = "" } }
+                        .disabled(code.isEmpty)
+                }
             } else {
-                HStack { ProgressView().controlSize(.small); Text(login.submitted ? "Completing sign-in…" : "Waiting for Claude Code's login link…") }
+                HStack { ProgressView().controlSize(.small); Text(login.submitted ? "Completing sign-in…" : "Waiting for \(login.provider.title)'s login link…") }
             }
             Button("Cancel sign-in") { login.cancel(); code = "" }
         }.padding(14).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
@@ -236,18 +241,35 @@ struct MonitorView: View {
     private func startLogin(_ id: UUID) {
         openWindow()
         perform {
-            try login.start(id, store: monitor.store) { id in Task { await monitor.refresh(id) } }
+            guard let provider = monitor.entries.first(where: { $0.id == id })?.account.provider else { return }
+            try login.start(id, provider: provider, store: monitor.store) { id in Task { await monitor.refresh(id) } }
             monitor.beginLogin(id)
         }
+    }
+
+    private func addProvider(_ provider: Provider) {
+        if provider.usesHelper {
+            guard !demo else { return }
+            perform { startLogin(try monitor.add(label: "", provider: provider)) }
+        } else { connect(provider, nil) }
+    }
+
+    private func reconnect(_ account: Account) {
+        if account.provider.usesHelper { startLogin(account.id) }
+        else { connect(account.provider, account) }
     }
 
     private func grantAccess(_ id: UUID) {
         granting = id
         error = nil
         let store = monitor.store
+        let provider = monitor.entries.first(where: { $0.id == id })?.account.provider
         Task {
             do {
-                try await Task.detached { _ = try store.credentials(id, allowInteraction: true) }.value
+                try await Task.detached {
+                    if provider == .claude { _ = try store.credentials(id, allowInteraction: true) }
+                    else { _ = try store.secrets(id, allowInteraction: true) }
+                }.value
                 await monitor.refresh(id)
             } catch { self.error = (error as? MonitorError)?.localizedDescription ?? "Could not access the scoped Keychain entry." }
             granting = nil
@@ -263,7 +285,13 @@ struct MonitorView: View {
 
 extension ClaudeUsage.Window {
     var remainingColor: Color {
-        guard let remaining else { return .secondary }
+        UsageMetric(title: "", kind: .quota, value: remaining).remainingColor
+    }
+}
+
+extension UsageMetric {
+    var remainingColor: Color {
+        guard let remaining = value, remaining.isFinite, (0...100).contains(remaining) else { return .secondary }
         if remaining == 0 { return .red }
         return remaining <= 10 ? .orange : .accentColor
     }

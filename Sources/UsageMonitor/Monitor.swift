@@ -22,13 +22,26 @@ final class Monitor {
         entries = try store.load().map { AccountEntry(account: $0) }
     }
 
-    func add(label: String) throws -> UUID {
+    func add(label: String, provider: Provider = .claude, options: [String: String] = [:],
+             secrets: ConnectionSecrets? = nil) throws -> UUID {
         let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        let account = Account(label: String(label.prefix(80)))
+        let account = Account(label: String(label.prefix(80)), provider: provider, options: options)
         try store.prepare(account.id)
-        try store.save(entries.map(\.account) + [account])
+        do {
+            if let secrets { try store.saveSecrets(secrets, for: account.id) }
+            try store.save(entries.map(\.account) + [account])
+        } catch {
+            try? store.deleteProfile(account.id)
+            throw error
+        }
         entries.append(AccountEntry(account: account))
         return account.id
+    }
+
+    func reconnect(_ id: UUID, secrets: ConnectionSecrets) throws {
+        guard entries.contains(where: { $0.id == id }) else { return }
+        try store.saveSecrets(secrets, for: id)
+        beginLogin(id)
     }
 
     func rename(_ id: UUID, label: String) throws {
@@ -64,6 +77,9 @@ final class Monitor {
         do {
             let snapshot = try await fetch(id)
             guard requests[id] == requestID, let current = entries.firstIndex(where: { $0.id == id }) else { return }
+            if entries[current].account.identity != nil && snapshot.identity == nil {
+                throw MonitorError.invalidResponse
+            }
             if let returned = snapshot.identity {
                 if let identity = entries[current].account.identity, !identity.matches(returned) {
                     throw MonitorError.identityChanged
