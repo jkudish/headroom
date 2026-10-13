@@ -314,26 +314,3 @@ extension UsageMetric {
         return remaining <= 10 ? .orange : .accentColor
     }
 }
-
-@MainActor
-func makeMonitorPanel(_ content: NSView) -> NSView {
-    let panel: NSView
-    if #available(macOS 26, *) {
-        let glass = NSGlassEffectView()
-        glass.style = .regular
-        glass.cornerRadius = 20
-        if #available(macOS 27, *) { glass.effectIsInteractive = true }
-        glass.contentView = content
-        panel = glass
-    } else {
-        let material = NSVisualEffectView()
-        material.material = .popover
-        material.blendingMode = .behindWindow
-        material.state = .active
-        material.addSubview(content)
-        panel = material
-    }
-    content.autoresizingMask = [.width, .height]
-    content.frame = panel.bounds
-    return panel
-}

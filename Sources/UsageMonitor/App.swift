@@ -49,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.behavior = .transient
             popover.contentSize = NSSize(width: 360, height: 670)
             let controller = NSViewController()
-            controller.view = makeMonitorPanel(NSHostingView(rootView: view(monitor)))
+            controller.view = NSHostingView(rootView: view(monitor))
             popover.contentViewController = controller
             self.popover = popover
             let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -87,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let sheet = NSWindow(contentRect: NSRect(origin: .zero, size: content.fittingSize),
                              styleMask: [.titled], backing: .buffered, defer: false)
         sheet.title = provider.title
-        sheet.contentView = makeMonitorPanel(content)
+        sheet.contentView = content
         sheet.isReleasedWhenClosed = false
         connectionWindow = sheet
         window.beginSheet(sheet)
@@ -119,9 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 720),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = demo ? "Usage Monitor — Demo" : "Usage Monitor"
-            window.isOpaque = false
-            window.backgroundColor = .clear
-            window.contentView = makeMonitorPanel(NSHostingView(rootView: view(monitor)))
+            window.contentView = NSHostingView(rootView: view(monitor))
             window.minSize = NSSize(width: 360, height: 480)
             window.isReleasedWhenClosed = false
             window.center()
