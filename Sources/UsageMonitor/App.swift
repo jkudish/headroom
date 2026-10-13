@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let monitor else { return }
             let popover = NSPopover()
             popover.behavior = .transient
-            popover.contentSize = NSSize(width: 460, height: 670)
+            popover.contentSize = NSSize(width: 360, height: 670)
             let controller = NSViewController()
             controller.view = makeMonitorPanel(NSHostingView(rootView: view(monitor)))
             popover.contentViewController = controller
@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.isOpaque = false
             window.backgroundColor = .clear
             window.contentView = makeMonitorPanel(NSHostingView(rootView: view(monitor)))
-            window.minSize = NSSize(width: 460, height: 480)
+            window.minSize = NSSize(width: 360, height: 480)
             window.isReleasedWhenClosed = false
             window.center()
             self.window = window

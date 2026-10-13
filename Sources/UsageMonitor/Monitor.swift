@@ -64,14 +64,17 @@ final class Monitor {
         do {
             let snapshot = try await fetch(id)
             guard requests[id] == requestID, let current = entries.firstIndex(where: { $0.id == id }) else { return }
-            if let identity = entries[current].account.identity, !identity.matches(snapshot.identity) {
-                throw MonitorError.identityChanged
-            }
-            if entries.contains(where: { $0.id != id && $0.account.identity?.matches(snapshot.identity) == true }) {
-                throw MonitorError.duplicateAccount
+            if let returned = snapshot.identity {
+                if let identity = entries[current].account.identity, !identity.matches(returned) {
+                    throw MonitorError.identityChanged
+                }
+                if entries.contains(where: {
+                    $0.id != id && $0.account.provider == entries[current].account.provider
+                        && $0.account.identity?.matches(returned) == true
+                }) { throw MonitorError.duplicateAccount }
             }
             var accounts = entries.map(\.account)
-            accounts[current].identity = snapshot.identity
+            if let identity = snapshot.identity { accounts[current].identity = identity }
             try store.save(accounts)
             entries[current].account = accounts[current]
             entries[current].snapshot = snapshot

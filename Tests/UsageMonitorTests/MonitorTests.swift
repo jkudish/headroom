@@ -10,6 +10,16 @@ private func temporaryStore() throws -> AccountStore {
 
 private func response(_ value: String) -> Data { Data(value.utf8) }
 
+@Test func oldClaudeRecordsKeepIDsAndNewProviderRecordsKeepTheirProvider() throws {
+    let id = UUID()
+    let old = try JSONDecoder().decode(Account.self, from: response("{\"id\":\"\(id)\",\"label\":\"Personal\"}"))
+    #expect(old.id == id)
+    #expect(old.displayName == "Personal")
+    let codex = try JSONDecoder().decode(Account.self, from: response("{\"id\":\"\(id)\",\"label\":\"Work\",\"provider\":\"codex\"}"))
+    let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(codex)) as? [String: Any])
+    #expect(encoded["provider"] as? String == "codex")
+}
+
 @Test func metersUseRemainingPercentAndCentsWithoutInventingMissingLimits() throws {
     let usage = try JSONDecoder().decode(ClaudeUsage.self, from: response("""
     {"five_hour":{"utilization":23.5,"resets_at":"2026-10-13T16:30:00.123Z"},
@@ -118,14 +128,14 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     try await service.set(b.id, identity: "bob", utilization: 87)
     await monitor.refresh(a.id)
     await monitor.refresh(b.id)
-    #expect(monitor.entries[0].snapshot?.usage.fiveHour?.remaining == 87)
-    #expect(monitor.entries[1].snapshot?.usage.fiveHour?.remaining == 13)
+    #expect(monitor.entries[0].snapshot?.metrics.first?.value == 87)
+    #expect(monitor.entries[1].snapshot?.metrics.first?.value == 13)
     #expect(try store.load()[0].identity?.accountID == "alice")
     try await service.set(a.id, identity: "bob", utilization: 2)
     await monitor.refresh(a.id)
     #expect(monitor.entries[0].snapshot == nil)
     #expect(monitor.entries[0].error == MonitorError.identityChanged.localizedDescription)
-    #expect(monitor.entries[1].snapshot?.usage.fiveHour?.remaining == 13)
+    #expect(monitor.entries[1].snapshot?.metrics.first?.value == 13)
     // Binding is durable, not just an in-memory check.
     let restarted = try Monitor(store: store, fetch: { id in try await service.fetch(id) })
     await restarted.refresh(a.id)
@@ -166,14 +176,14 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     async let first = client.fetch(a)
     async let second = client.fetch(b)
     let (alice, bob) = try await (first, second)
-    #expect(alice.identity.accountID == "alice")
-    #expect(alice.identity.email == "alice@example.test")
+    #expect(alice.identity?.accountID == "alice")
+    #expect(alice.identity?.email == "alice@example.test")
     #expect(Account(label: "", identity: alice.identity).displayName == "Alice")
-    #expect(alice.usage.fiveHour?.remaining == 81)
-    #expect(bob.identity.accountID == "bob")
-    #expect(bob.identity.email == "bob@example.test")
+    #expect(alice.metrics.first?.value == 81)
+    #expect(bob.identity?.accountID == "bob")
+    #expect(bob.identity?.email == "bob@example.test")
     #expect(Account(label: "", identity: bob.identity).displayName == "bob@example.test")
-    #expect(bob.usage.fiveHour?.remaining == 17)
+    #expect(bob.metrics.first?.value == 17)
 }
 
 @Test func expiredAndInferenceOnlyTokensCannotReadUsage() {

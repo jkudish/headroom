@@ -4,16 +4,32 @@ struct Account: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     var label: String
     var identity: AccountIdentity?
+    var provider: Provider
+    var options: [String: String]
 
-    init(id: UUID = UUID(), label: String, identity: AccountIdentity? = nil) {
+    init(id: UUID = UUID(), label: String, identity: AccountIdentity? = nil,
+         provider: Provider = .claude, options: [String: String] = [:]) {
         self.id = id
         self.label = label
         self.identity = identity
+        self.provider = provider
+        self.options = options
+    }
+
+    enum CodingKeys: String, CodingKey { case id, label, identity, provider, options }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        label = try values.decode(String.self, forKey: .label)
+        identity = try values.decodeIfPresent(AccountIdentity.self, forKey: .identity)
+        provider = try values.decodeIfPresent(Provider.self, forKey: .provider) ?? .claude
+        options = try values.decodeIfPresent([String: String].self, forKey: .options) ?? [:]
     }
 
     var displayName: String {
         if !label.isEmpty { return label }
-        return identity?.name ?? identity?.email ?? "New Claude account"
+        return identity?.name ?? identity?.email ?? "New \(provider.title) account"
     }
 }
 
@@ -91,9 +107,33 @@ struct ClaudeUsage: Decodable, Sendable {
 }
 
 struct UsageSnapshot: Sendable {
-    let identity: AccountIdentity
-    let usage: ClaudeUsage
+    let identity: AccountIdentity?
+    let metrics: [UsageMetric]
     let fetchedAt: Date
+
+    init(identity: AccountIdentity? = nil, metrics: [UsageMetric], fetchedAt: Date = Date()) {
+        self.identity = identity
+        self.metrics = metrics
+        self.fetchedAt = fetchedAt
+    }
+
+    init(identity: AccountIdentity, usage: ClaudeUsage, fetchedAt: Date) {
+        self.identity = identity
+        self.fetchedAt = fetchedAt
+        var rows = [UsageMetric(title: "5-hour", kind: .quota, value: usage.fiveHour?.remaining,
+                               resetsAt: usage.fiveHour?.resetDate),
+                    UsageMetric(title: "Weekly", kind: .quota, value: usage.sevenDay?.remaining,
+                               resetsAt: usage.sevenDay?.resetDate)]
+        if let extra = usage.extraUsage, extra.isEnabled == true {
+            rows.append(.init(title: "Extra usage spent", kind: .spend, value: extra.spent,
+                              unit: extra.currency ?? "USD", detail: "This month"))
+            rows.append(.init(title: "Extra usage cap", kind: .cap, value: extra.cap, unit: extra.currency ?? "USD"))
+        } else {
+            rows.append(.init(title: "Extra usage", kind: .note, value: nil,
+                              detail: usage.extraUsage?.isEnabled == false ? "Disabled" : "Unavailable"))
+        }
+        metrics = rows
+    }
 }
 
 struct Credential: Decodable, Sendable {
@@ -120,25 +160,27 @@ enum MonitorError: Error, LocalizedError, Equatable {
     case signInRequired, missingScope, identityChanged, duplicateAccount
     case keychainUnavailable, invalidProfile, invalidResponse, http(Int), network
     case helperMissing, helperFailed, loginBusy, invalidCode
+    case unsupported(String)
 
     var errorDescription: String? {
         switch self {
         case .signInRequired: "Sign in to this account. Its credentials are missing or expired."
         case .missingScope: "This token cannot read subscription usage. Use Claude subscription sign-in."
         case .identityChanged: "This profile now belongs to a different account or organization. Remove it and add a new account."
-        case .duplicateAccount: "This Claude account and organization are already connected. Sign in with a different account."
+        case .duplicateAccount: "This account and organization are already connected. Sign in with a different account."
         case .keychainUnavailable: "The scoped Keychain entry is unavailable. Unlock the login Keychain and retry."
         case .invalidProfile: "The account profile is unsafe or inaccessible. No credentials were used."
-        case .invalidResponse: "Claude returned an unsupported response. Usage is unavailable."
-        case .http(401): "Claude rejected this login. Sign in again."
-        case .http(403): "Claude denied access to subscription usage."
-        case .http(429): "Claude rate-limited usage checks. Wait before refreshing."
-        case .http(let status): "Claude usage request failed (HTTP \(status))."
-        case .network: "Could not reach Claude. Check your connection and retry."
+        case .invalidResponse: "The provider returned an unsupported response. Usage is unavailable."
+        case .http(401): "The provider rejected these credentials. Reconnect this account."
+        case .http(403): "The provider denied access. Check the credential's billing permissions."
+        case .http(429): "The provider rate-limited usage checks. Wait before refreshing."
+        case .http(let status): "Usage request failed (HTTP \(status))."
+        case .network: "Could not reach the provider. Check your connection and retry."
         case .helperMissing: "Install Claude Code at ~/.local/bin/claude, /opt/homebrew/bin/claude, or /usr/local/bin/claude."
         case .helperFailed: "Claude Code sign-in did not finish. Retry the login."
         case .loginBusy: "Finish or cancel the current sign-in first."
         case .invalidCode: "Paste the authorization code shown by Claude, not an API key or URL."
+        case .unsupported(let message): message
         }
     }
 }

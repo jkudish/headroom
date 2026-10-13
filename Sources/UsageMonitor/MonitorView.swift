@@ -65,7 +65,7 @@ struct MonitorView: View {
                 Button("Quit") { login.cancel(); NSApplication.shared.terminate(nil) }
             }.padding(12)
         }
-        .frame(minWidth: 440, minHeight: 440)
+        .frame(minWidth: 340, minHeight: 440)
         .alert("Account name", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $editedLabel)
             Button("Cancel", role: .cancel) { renaming = nil }
@@ -93,7 +93,7 @@ struct MonitorView: View {
                         .scaledToFit().frame(width: 22, height: 22).accessibilityLabel("Claude")
                 }
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.account.displayName).font(.headline)
+                    Text(entry.account.displayName).font(.headline).lineLimit(1).truncationMode(.middle)
                     if entry.account.identity?.email != entry.account.displayName {
                         Text(entry.account.identity?.email ?? "Not connected")
                             .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
@@ -110,9 +110,9 @@ struct MonitorView: View {
                 .accessibilityLabel("Actions for \(entry.account.displayName)")
             }
             if let snapshot = entry.snapshot {
-                meter("5-hour", window: snapshot.usage.fiveHour)
-                meter("Weekly", window: snapshot.usage.sevenDay)
-                extraUsage(snapshot.usage.extraUsage)
+                ForEach(Array(snapshot.metrics.enumerated()), id: \.offset) { _, metric in
+                    metricRow(metric)
+                }
                 HStack {
                     Text("Checked \(snapshot.fetchedAt.formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.secondary)
                     Spacer()
@@ -142,6 +142,29 @@ struct MonitorView: View {
         .padding(14)
         .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+    }
+
+    @ViewBuilder private func metricRow(_ metric: UsageMetric) -> some View {
+        if metric.kind == .quota {
+            meter(metric.title, window: .init(utilization: metric.value.map { 100 - $0 },
+                                           resetsAt: metric.resetsAt.map { ISO8601DateFormatter().string(from: $0) }))
+        } else {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(metric.title).font(.caption)
+                    Spacer(minLength: 6)
+                    if let value = metric.value, value.isFinite {
+                        Text(metric.unit.count == 3 && ["USD", "EUR", "GBP", "CAD", "CNY"].contains(metric.unit)
+                             ? value.formatted(.currency(code: metric.unit))
+                             : "\(value.formatted(.number.precision(.fractionLength(0...2)))) \(metric.unit)")
+                            .font(.caption.monospacedDigit())
+                    } else if metric.kind != .note {
+                        Text("Unavailable").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if let detail = metric.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+            }
+        }
     }
 
     private func meter(_ title: String, window: ClaudeUsage.Window?) -> some View {
