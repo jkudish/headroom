@@ -44,7 +44,7 @@ struct ConnectionView: View {
                 Text("Saved only in this Mac's Keychain, separately for each connection.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if let error { Text(error).font(.callout).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+            if let error { UsageWarning(message: error) }
             HStack {
                 Button(provider.supportsRead ? "Cancel" : "Close", action: finish)
                 Spacer()

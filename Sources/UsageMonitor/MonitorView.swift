@@ -53,8 +53,7 @@ struct MonitorView: View {
                         if entry.id != monitor.entries.last?.id { Divider() }
                     }
                     if let message = error ?? login.error {
-                        Label(message, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red)
-                            .fixedSize(horizontal: false, vertical: true)
+                        UsageWarning(message: message)
                     }
                 }.padding(18)
             }
@@ -107,31 +106,11 @@ struct MonitorView: View {
 
     private func accountSection(_ entry: AccountEntry) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top) {
-                if entry.account.provider == .claude,
-                   let url = Bundle.module.url(forResource: "claude-logo", withExtension: "png"),
-                   let image = NSImage(contentsOf: url) {
-                    Image(nsImage: image).resizable().interpolation(.high)
-                        .scaledToFit().frame(width: 22, height: 22).accessibilityLabel("Claude")
-                } else if entry.account.provider == .codex,
-                          let url = Bundle.module.url(forResource: "openai-logo", withExtension: "png"),
-                          let image = NSImage(contentsOf: url) {
-                    Image(nsImage: image).renderingMode(.template).resizable().interpolation(.high)
-                        .scaledToFit().frame(width: 22, height: 22).accessibilityLabel("OpenAI")
-                } else {
-                    Text(String(entry.account.provider.title.prefix(1))).font(.headline)
-                        .frame(width: 22, height: 22).foregroundStyle(.secondary)
-                        .accessibilityLabel(entry.account.provider.title)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.account.displayName).font(.headline).lineLimit(1).truncationMode(.middle)
-                    Text(entry.account.provider.title).font(.caption).foregroundStyle(.secondary)
-                    if let email = entry.account.identity?.email, !email.isEmpty, email != entry.account.displayName {
-                        Text(email).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                    }
-                }
+            AccountSummaryView(entry: entry)
+            HStack {
+                Button("Refresh") { Task { await monitor.refresh(entry.id) } }
+                    .buttonStyle(.borderless).disabled(demo || entry.refreshing || login.accountID != nil)
                 Spacer()
-                if entry.refreshing { ProgressView().controlSize(.small) }
                 Menu {
                     Button("Rename account…") { editedLabel = entry.account.label; renaming = entry.id }
                     Button("Reconnect account…") { reconnect(entry.account) }
@@ -141,27 +120,9 @@ struct MonitorView: View {
                 .menuStyle(.borderlessButton).fixedSize().disabled(demo || login.accountID != nil)
                 .accessibilityLabel("Actions for \(entry.account.displayName)")
             }
-            if let snapshot = entry.snapshot {
-                ForEach(Array(snapshot.metrics.enumerated()), id: \.offset) { _, metric in
-                    metricRow(metric)
-                }
-                HStack {
-                    Text("Checked \(snapshot.fetchedAt.formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Refresh") { Task { await monitor.refresh(entry.id) } }
-                        .buttonStyle(.borderless)
-                        .disabled(demo || entry.refreshing || login.accountID != nil)
-                }
-            } else {
-                if let message = entry.error {
-                    Label(message, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text("Usage unavailable until this account connects.").font(.callout).foregroundStyle(.secondary)
-                }
+            if entry.snapshot == nil {
                 HStack {
                     Button(entry.account.provider.usesHelper ? "Sign in" : "Enter credentials") { reconnect(entry.account) }
-                    Button("Refresh") { Task { await monitor.refresh(entry.id) } }
                     if entry.error == MonitorError.keychainUnavailable.localizedDescription {
                         Button("Allow Keychain access") { grantAccess(entry.id) }
                     }
@@ -173,60 +134,6 @@ struct MonitorView: View {
             }
         }
         .padding(.vertical, 4)
-    }
-
-    @ViewBuilder private func metricRow(_ metric: UsageMetric) -> some View {
-        if metric.kind == .quota {
-            meter(metric)
-        } else {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(metric.title).font(.caption)
-                    Spacer(minLength: 6)
-                    if let value = metric.value, value.isFinite {
-                        Text(metric.unit.count == 3 && ["USD", "EUR", "GBP", "CAD", "CNY"].contains(metric.unit)
-                             ? value.formatted(.currency(code: metric.unit))
-                             : "\(value.formatted(.number.precision(.fractionLength(0...2)))) \(metric.unit)")
-                            .font(.caption.monospacedDigit())
-                    } else if metric.kind != .note {
-                        Text("Unavailable").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                if let reset = metric.resetsAt {
-                    Text("Resets \(reset.usageResetText())").font(.caption).foregroundStyle(.secondary)
-                }
-                if let detail = metric.detail { Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(2).help(detail) }
-            }
-        }
-    }
-
-    private func meter(_ metric: UsageMetric) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 10) {
-                Text(metric.title).font(.callout.weight(.medium)).lineLimit(1)
-                Spacer(minLength: 6)
-                if let remaining = metric.value, remaining.isFinite, (0...100).contains(remaining) {
-                    Text("\(remaining.formatted(.number.precision(.fractionLength(0...1))))% left")
-                        .font(.callout.monospacedDigit()).foregroundStyle(metric.remainingColor)
-                } else {
-                    Text("Unavailable").font(.callout).foregroundStyle(.secondary)
-                }
-            }
-            if let remaining = metric.value, remaining.isFinite, (0...100).contains(remaining) {
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(metric.remainingColor.opacity(0.15))
-                        Capsule().fill(metric.remainingColor).frame(width: geometry.size.width * remaining / 100)
-                    }
-                }.frame(height: 6)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(metric.title) remaining").accessibilityValue("\(remaining) percent")
-            }
-            if let reset = metric.resetsAt {
-                Text(reset <= Date() ? "Reset time passed — refresh to update" : "Resets \(reset.usageResetText())")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else { Text("Reset time unavailable").font(.caption).foregroundStyle(.secondary) }
-        }
     }
 
     private var loginSection: some View {

@@ -16,6 +16,9 @@ import Testing
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(alice ? tokenA : tokenB)")
             #expect(request.httpMethod == "GET")
             #expect(request.url?.host == "chatgpt.com")
+            if request.url?.lastPathComponent == "rate-limit-reset-credits" {
+                return subscriptionResponse(request, "", status: 404)
+            }
             if request.url?.path == "/backend-api/accounts" {
                 // The first/default workspace is deliberately not the selected one.
                 return subscriptionResponse(request, """
@@ -188,6 +191,9 @@ import Testing
         _ = try writeCodexAuth(store, id, workspace: "selected", email: "person@example.test")
         let http = ProviderHTTP { request in
             if request.url?.lastPathComponent == "accounts" { return subscriptionResponse(request, "", status: 404) }
+            if request.url?.lastPathComponent == "rate-limit-reset-credits" {
+                return subscriptionResponse(request, "", status: 403)
+            }
             return subscriptionResponse(request, """
             {"account_id":"selected","rate_limit":{"primary_window":null,
              "secondary_window":{"used_percent":68,"limit_window_seconds":604800,"reset_at":1792342800}},
@@ -199,10 +205,62 @@ import Testing
         #expect(result.metrics.filter { $0.kind == .quota }.map(\.value) == [32, 92.239])
         #expect(result.metrics.first?.title == "Weekly")
         #expect(result.metrics.first?.resetsAt == Date(timeIntervalSince1970: 1792342800))
-        #expect(result.metrics.first { $0.kind == .balance }?.value == 1234.5)
+        #expect(result.metrics.first { $0.title == "Credit balance" }?.value == 1234.5)
         #expect(result.metrics.first { $0.kind == .spend }?.value == 7761)
         #expect(result.metrics.first { $0.kind == .cap }?.value == 100000)
         #expect(result.metrics.filter { $0.kind != .quota }.allSatisfy { $0.unit == "credits" })
+    }
+
+    @Test func codexDisplaysPlanCreditRemainingAndAccountScopedResetInventory() async throws {
+        let store = try subscriptionStore()
+        defer { try? FileManager.default.removeItem(at: store.root) }
+        let id = UUID()
+        let token = try writeCodexAuth(store, id, workspace: "selected", email: "person@example.test")
+        let client = CodexClient(store: store, http: ProviderHTTP { request in
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
+            #expect(request.value(forHTTPHeaderField: "ChatGPT-Account-Id") == "selected")
+            #expect(request.httpMethod == "GET")
+            if request.url?.lastPathComponent == "accounts" { return subscriptionResponse(request, "", status: 404) }
+            if request.url?.lastPathComponent == "rate-limit-reset-credits" {
+                #expect(request.value(forHTTPHeaderField: "OpenAI-Beta") == "codex-1")
+                return subscriptionResponse(request, """
+                {"available_count":3,"credits":[
+                  {"id":"one","reset_type":"codex_rate_limits","status":"available","expires_at":"2030-10-20T21:00:00.123Z"},
+                  {"id":"expired","reset_type":"codex_rate_limits","status":"available","expires_at":"2020-01-01T00:00:00Z"},
+                  {"id":"used","reset_type":"codex_rate_limits","status":"redeemed","expires_at":"2030-10-15T21:00:00Z"}]}
+                """)
+            }
+            return subscriptionResponse(request, """
+            {"plan_type":"pro","rate_limit":{"secondary_window":{"used_percent":37,"limit_window_seconds":604800}},
+             "individual_limit":{"limit":100000,"used":"50061.32","resets_at":1792342800},
+             "credits":{"balance":"4321.75"}}
+            """)
+        })
+        let snapshot = try await client.fetch(id)
+        #expect(snapshot.plan == "Pro")
+        #expect(snapshot.resetCredits?.availableCount == 3) // A partial list must not replace the reported count.
+        #expect(snapshot.resetCredits?.expirations.count == 1)
+        let left = try #require(snapshot.metrics.first { $0.title == "Credits left" }?.value)
+        #expect(abs(left - 49938.68) < 0.000001)
+        #expect(snapshot.metrics.first { $0.title == "Individual credit quota" }?.resetsAt == Date(timeIntervalSince1970: 1792342800))
+        #expect(snapshot.metrics.first { $0.kind == .balance && $0.title == "Credit balance" }?.value == 4321.75)
+    }
+
+    @Test(arguments: ["{}", "{\"available_count\":-1,\"credits\":[]}",
+                      "{\"available_count\":2,\"credits\":[{\"id\":\"x\",\"reset_type\":\"codex_rate_limits\",\"status\":\"available\",\"expires_at\":\"invalid\"}]}"])
+    func codexBadSupplementDoesNotEraseGoodQuotas(_ body: String) async throws {
+        let store = try subscriptionStore()
+        defer { try? FileManager.default.removeItem(at: store.root) }
+        let id = UUID()
+        _ = try writeCodexAuth(store, id, workspace: "selected", email: "person@example.test")
+        let snapshot = try await CodexClient(store: store, http: ProviderHTTP { request in
+            if request.url?.lastPathComponent == "accounts" { return subscriptionResponse(request, "", status: 404) }
+            if request.url?.lastPathComponent == "rate-limit-reset-credits" { return subscriptionResponse(request, body) }
+            return subscriptionResponse(request, "{\"plan_type\":\"future_plan\",\"rate_limit\":{\"primary_window\":{\"used_percent\":17}}}")
+        }).fetch(id)
+        #expect(snapshot.metrics.first?.value == 83)
+        #expect(snapshot.plan == "future_plan")
+        #expect(snapshot.resetCredits == nil)
     }
 
     @Test func subscriptionsDoNotTurnAbsentQuotaWindowsIntoFullMeters() async throws {

@@ -117,16 +117,23 @@ struct UsageSnapshot: Sendable {
     let identity: AccountIdentity?
     let metrics: [UsageMetric]
     let fetchedAt: Date
+    let plan: String?
+    let resetCredits: LimitResetCredits?
 
-    init(identity: AccountIdentity? = nil, metrics: [UsageMetric], fetchedAt: Date = Date()) {
+    init(identity: AccountIdentity? = nil, metrics: [UsageMetric], fetchedAt: Date = Date(),
+         plan: String? = nil, resetCredits: LimitResetCredits? = nil) {
         self.identity = identity
         self.metrics = metrics
         self.fetchedAt = fetchedAt
+        self.plan = plan
+        self.resetCredits = resetCredits
     }
 
-    init(identity: AccountIdentity, usage: ClaudeUsage, fetchedAt: Date) {
+    init(identity: AccountIdentity, usage: ClaudeUsage, fetchedAt: Date, plan: String? = nil) {
         self.identity = identity
         self.fetchedAt = fetchedAt
+        self.plan = plan
+        resetCredits = nil
         var rows = [UsageMetric(title: "5-hour", kind: .quota, value: usage.fiveHour?.remaining,
                                resetsAt: usage.fiveHour?.resetDate),
                     UsageMetric(title: "Weekly", kind: .quota, value: usage.sevenDay?.remaining,
@@ -143,10 +150,27 @@ struct UsageSnapshot: Sendable {
     }
 }
 
+struct LimitResetCredits: Sendable {
+    let availableCount: Int
+    let expirations: [Date]
+}
+
 struct Credential: Decodable, Sendable {
     let accessToken: String
     let expiresAt: Double?
     let scopes: [String]?
+    var subscriptionType: String? = nil
+    var rateLimitTier: String? = nil
+
+    var planLabel: String? {
+        let plans = ["pro": "Pro", "max": "Max", "team": "Team", "enterprise": "Enterprise"]
+        let tier = (rateLimitTier ?? "").lowercased().split(separator: "_").map(String.init)
+        let plan = subscriptionType.flatMap { plans[$0.lowercased()] }
+            ?? tier.compactMap { plans[$0] }.first
+        guard plan == "Max", let index = tier.firstIndex(of: "max"), tier.indices.contains(index + 1),
+              ["5x", "20x"].contains(tier[index + 1]) else { return plan }
+        return "Max \(tier[index + 1])"
+    }
 
     static func decode(_ data: Data, now: Date = Date()) throws -> Self {
         struct Root: Decodable { let claudeAiOauth: Credential? }
@@ -160,6 +184,20 @@ struct Credential: Decodable, Sendable {
             throw MonitorError.signInRequired
         }
         return credential
+    }
+}
+
+extension Credential {
+    private enum CodingKeys: String, CodingKey { case accessToken, expiresAt, scopes, subscriptionType, rateLimitTier }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        accessToken = try values.decode(String.self, forKey: .accessToken)
+        expiresAt = try values.decodeIfPresent(Double.self, forKey: .expiresAt)
+        scopes = try values.decodeIfPresent([String].self, forKey: .scopes)
+        // Helper plan metadata is optional; it never grants identity or usage access.
+        subscriptionType = try? values.decode(String.self, forKey: .subscriptionType)
+        rateLimitTier = try? values.decode(String.self, forKey: .rateLimitTier)
     }
 }
 

@@ -7,6 +7,16 @@ struct AccountEntry: Identifiable {
     var error: String?
     var refreshing = false
     var id: UUID { account.id }
+
+    var menuBarMetrics: [UsageMetric] {
+        let metrics = snapshot?.metrics ?? []
+        let quotas = metrics.filter { $0.kind == .quota && $0.value.map { $0.isFinite && (0...100).contains($0) } == true }
+        // Session then weekly, independent of backend window order. Other quotas retain their order.
+        let ordered = quotas.filter { $0.title == "5-hour" } + quotas.filter { $0.title == "Weekly" }
+            + quotas.filter { !["5-hour", "Weekly"].contains($0.title) }
+        if !ordered.isEmpty { return Array(ordered.prefix(2)) }
+        return Array(metrics.filter { $0.kind == .balance && $0.value.map { $0.isFinite && $0 >= 0 } == true }.prefix(1))
+    }
 }
 
 @MainActor @Observable

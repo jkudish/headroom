@@ -64,6 +64,26 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(usage.sevenDay?.remaining == nil)
 }
 
+@Test @MainActor func menuBarKeepsEachAccountsQuotaOrderAndUnknownSeparateFromZero() {
+    let entry = AccountEntry(account: Account(label: "A", provider: .codex), snapshot: UsageSnapshot(metrics: [
+        .init(title: "Credits left", kind: .balance, value: 1234, unit: "credits"),
+        .init(title: "Weekly", kind: .quota, value: 0),
+        .init(title: "5-hour", kind: .quota, value: 9),
+        .init(title: "Malformed", kind: .quota, value: 101)
+    ]))
+    #expect(entry.menuBarMetrics.map(\.title) == ["5-hour", "Weekly"])
+    #expect(entry.menuBarMetrics.map(\.value) == [9, 0])
+    #expect(AccountEntry(account: .init(label: "B")).menuBarMetrics.isEmpty)
+    let wallet = AccountEntry(account: .init(label: "Wallet", provider: .openRouter), snapshot: UsageSnapshot(metrics: [
+        .init(title: "Spend", kind: .spend, value: 72, unit: "USD"),
+        .init(title: "Wallet credits", kind: .balance, value: 37.82, unit: "USD")
+    ]))
+    #expect(wallet.menuBarMetrics.map(\.value) == [37.82])
+    #expect(MenuBarAccountImage.text(.init(title: "Quota", kind: .quota, value: 0)) == "0%")
+    #expect(MenuBarAccountImage.text(.init(title: "Quota", kind: .quota, value: 0.04)) == "<1%")
+    #expect(MenuBarAccountImage.text(.init(title: "Quota", kind: .quota, value: nil)) == "—")
+}
+
 @Test func freshProfilesNeverUseAnAmbientCredentialAndMetadataSurvivesRestart() throws {
     let store = try temporaryStore()
     defer { try? FileManager.default.removeItem(at: store.root) }
@@ -194,7 +214,10 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
 @Test func clientKeepsSelectedAccountCredentialsAndProfileTogether() async throws {
     let a = UUID(), b = UUID()
     let client = ClaudeClient(credentials: { id in
-        Credential(accessToken: id == a ? "fixture-alice" : "fixture-bob", expiresAt: nil, scopes: ["user:profile"])
+        try Credential.decode(response("""
+        {"claudeAiOauth":{"accessToken":"\(id == a ? "fixture-alice" : "fixture-bob")","scopes":["user:profile"],
+          "subscriptionType":"\(id == a ? "max" : "pro")","rateLimitTier":"default_claude_max_20x"}}
+        """))
     }, send: { request in
         let alice = request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-alice"
         let profile = alice
@@ -210,10 +233,21 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(alice.identity?.email == "alice@example.test")
     #expect(Account(label: "", identity: alice.identity).displayName == "Alice")
     #expect(alice.metrics.first?.value == 81)
+    #expect(alice.plan == "Max 20x")
     #expect(bob.identity?.accountID == "bob")
     #expect(bob.identity?.email == "bob@example.test")
     #expect(Account(label: "", identity: bob.identity).displayName == "bob@example.test")
     #expect(bob.metrics.first?.value == 17)
+    #expect(bob.plan == "Pro")
+}
+
+@Test(arguments: ["null", "17", "{}"])
+func malformedOptionalClaudePlanDoesNotInvalidateUsageCredentials(_ plan: String) throws {
+    let credential = try Credential.decode(response("""
+    {"claudeAiOauth":{"accessToken":"fixture","scopes":["user:profile"],"subscriptionType":\(plan),"rateLimitTier":\(plan)}}
+    """))
+    #expect(credential.accessToken == "fixture")
+    #expect(credential.planLabel == nil)
 }
 
 @Test func expiredAndInferenceOnlyTokensCannotReadUsage() {

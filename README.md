@@ -1,6 +1,6 @@
 # Usage Monitor PoC
 
-Local macOS 14+ menu-bar app, written in Swift 6 with AppKit and SwiftUI. Connect multiple independent subscription and API accounts, including accounts that are not signed into your local CLIs. The menu dropdown is 360 points wide and scrolls; the account window can be resized.
+Local macOS 14+ menu-bar app, written in Swift 6 with AppKit and SwiftUI. Connect multiple independent subscription and API accounts, including accounts that are not signed into your local CLIs. A native macOS menu stacks all accounts in 360-point content rows; AppKit handles overflow. Each account has its own menu-bar icon with up to two quota readings (session then weekly), or its available balance. Missing readings show a dash, not zero. Hover identifies the account and meters; click any icon to see the whole stack. The account window can be resized.
 
 ## Run
 
@@ -22,7 +22,7 @@ The build is Apple Silicon, locally ad-hoc signed, and **not notarized**. The bu
 
 ## Connect accounts
 
-1. Choose a provider from **Add account**.
+1. Choose a provider from **+ Connect service…** in the menu, or the **+** in the account window.
 2. For Claude or Codex, open the generated link in the browser profile for the account you want. The official helper owns token exchange. Claude may ask you to paste an authorization code into the app. Codex shows a device code: enter it on OpenAI's page, then wait for browser approval. Enable device code authorization in ChatGPT Security settings if required.
 3. For other connectors, enter a separate key or token in the native connection form. Check the required credential type below. Do not paste codes, tokens, cookies, or passwords into an agent chat.
 4. If macOS blocks a scoped Keychain read, click **Allow Keychain access**. Allow only that connection's entry; **Always Allow** permits later checks. Do not reset the login Keychain.
@@ -35,8 +35,8 @@ These are implemented reads, not a claim of live verification for every provider
 
 | Connection | Credential | Reported information and limits |
 |---|---|---|
-| Claude | Independent official-helper sign-in | 5-hour/weekly remaining and reset; extra-usage monthly spend/cap, not prepaid credits |
-| Codex | Independent official-helper device sign-in | Returned quota windows, reset, and credit quantities. Credits are not assumed to be USD. Identity binds a human and selected workspace |
+| Claude | Independent official-helper sign-in | 5-hour/weekly remaining and reset; plan from this account's helper metadata when present; extra-usage monthly spend/cap, not prepaid credits |
+| Codex | Independent official-helper device sign-in | Returned plan, quota windows, reset, wallet credits and individual credit allowance. Supplemental available-reset inventory and next known expiry. Credits are not assumed to be USD or raw tokens. Identity binds a human and selected workspace |
 | z.ai Coding Plan | Coding Plan API key; Global or China region | Returned quota types, periods, and resets; no wallet balance |
 | OpenRouter wallet | Management key | Purchased-minus-used wallet USD credits |
 | OpenRouter key | Ordinary API key; select key report | Key spend/caps, not wallet balance |
@@ -73,6 +73,8 @@ These are implemented reads, not a claim of live verification for every provider
 - Manual refresh only. Expired credentials need reconnection. No automatic refresh-token rotation, polling, or usage history. Model-specific Claude weekly windows are not shown.
 - Removal deletes only the selected app profile and scoped credentials. It does not revoke tokens remotely.
 
-The interface lets native AppKit popovers, sheets, windows, and standard controls own their appearance. It does not add glass or visual-effect backgrounds inside those surfaces, following Apple's [Liquid Glass adoption guidance](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass). Unboxed accounts use thin dividers; the header **+** connects another service. Zero remaining is red; above zero through 10% is orange. Reset dates use the local timezone and omit the year. The Claude badge comes from the official claude.com favicon. Codex uses OpenAI's [Blossom mark](https://commons.wikimedia.org/wiki/File:OpenAI_logo_2025_(symbol).svg), rendered in monochrome for each appearance. These marks identify their providers and do not imply endorsement.
+The interface uses a native AppKit `NSMenu` with transparent hosted account rows, matching CodexBar's presentation mechanism rather than a fixed-height popover. Menus, sheets, windows, and standard controls own their appearance; no glass/effect background is injected. This follows Apple's [Liquid Glass adoption guidance](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass). Unboxed accounts use thin dividers, with no account switcher or local-log history. Error paragraphs use readable primary text beside a warning icon. Zero remaining is red; above zero through 10% is orange. Reset dates use the local timezone and omit the year. The Claude badge comes from the official claude.com favicon. Codex uses OpenAI's [Blossom mark](https://commons.wikimedia.org/wiki/File:OpenAI_logo_2025_(symbol).svg), rendered in monochrome for each appearance. Other providers use a letter badge. These marks identify their providers and do not imply endorsement.
+
+Codex reset-credit inventory is read-only. Its count comes from the provider; expiries describe only known inventory records. An unavailable supplemental endpoint does not hide valid quotas. Reset redemption is not implemented. OpenAI documents `account/rateLimitResetCredit/consume` in its [App Server API](https://developers.openai.com/codex/app-server); consuming a finite credit requires an explicit account-bound confirmation and separate verification before adding that action.
 
 The automated suite covers selected-account credentials, identity changes, persistence, units, incomplete cost pagination, missing fields, over-plan credits, and safe errors. Fresh helper start/cancel checks do not complete real sign-in. New-provider authentication, live two-account readings, and comparisons against dashboards still need interactive verification.

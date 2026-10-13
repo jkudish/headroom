@@ -26,7 +26,8 @@ struct ClaudeClient: Sendable {
     }
 
     func fetch(_ id: UUID) async throws -> UsageSnapshot {
-        let token = try credentials(id).accessToken
+        let credential = try credentials(id)
+        let token = credential.accessToken
         let profile = try await request("profile", token: token)
         struct Profile: Decodable {
             struct User: Decodable {
@@ -59,7 +60,7 @@ struct ClaudeClient: Sendable {
         return UsageSnapshot(
             identity: AccountIdentity(accountID: decoded.account.uuid, organizationID: decoded.organization.uuid,
                                       email: decoded.account.email ?? "Email unavailable", name: decoded.account.name),
-            usage: usage, fetchedAt: Date()
+            usage: usage, fetchedAt: Date(), plan: credential.planLabel
         )
     }
 

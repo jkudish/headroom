@@ -24,11 +24,14 @@ struct CodexClient: Sendable {
             let selected = accounts.items.filter { $0.id == credential.workspace }
             if selected.count == 1 { name = selected.first?.name }
         }
+        // Inventory is supplemental. A denied or changed endpoint must not hide valid quotas.
+        let resetData = try? await request("wham/rate-limit-reset-credits", credential: credential)
+        let resets = resetData.flatMap { try? CodexResetInventory.decode($0) }
         return UsageSnapshot(identity: AccountIdentity(
             // Owner is the human/workspace pair; the request header stays workspace-only.
             accountID: credential.user, organizationID: credential.workspace,
             email: credential.email ?? "Email unavailable", name: name
-        ), metrics: metrics)
+        ), metrics: metrics, plan: usage.planLabel, resetCredits: resets)
     }
 
     private func request(_ path: String, credential: CodexCredential) async throws -> Data {
@@ -37,6 +40,10 @@ struct CodexClient: Sendable {
         request.setValue(credential.workspace, forHTTPHeaderField: "ChatGPT-Account-Id")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("codex-cli", forHTTPHeaderField: "User-Agent")
+        if path == "wham/rate-limit-reset-credits" {
+            request.setValue("codex-1", forHTTPHeaderField: "OpenAI-Beta")
+            request.setValue("Codex Desktop", forHTTPHeaderField: "originator")
+        }
         return try await http.data(for: request)
     }
 }
@@ -216,6 +223,7 @@ private struct CodexUsage: Decodable {
         let used: CodexNumber?
         let remaining_percent: Double?
         let reset_at: Double?
+        let resets_at: Double?
 
         func metrics() throws -> [UsageMetric] {
             let cap = limit?.value, spent = used?.value
@@ -227,9 +235,13 @@ private struct CodexUsage: Decodable {
             var rows: [UsageMetric] = []
             if let remaining {
                 rows.append(.init(title: "Individual credit quota", kind: .quota, value: remaining,
-                                  resetsAt: reset_at.flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0) : nil }))
+                                  resetsAt: (resets_at ?? reset_at).flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0) : nil }))
             }
             // Backend credit quantities are not documented as cents or USD.
+            if let cap, let spent {
+                rows.append(.init(title: "Credits left", kind: .balance, value: max(0, cap - spent), unit: "credits",
+                                  detail: "Within the individual credit limit; not the wallet balance"))
+            }
             if let spent { rows.append(.init(title: "Credits used", kind: .spend, value: spent, unit: "credits")) }
             if let cap { rows.append(.init(title: "Credit limit", kind: .cap, value: cap, unit: "credits")) }
             return rows
@@ -239,10 +251,17 @@ private struct CodexUsage: Decodable {
     struct SpendControl: Decodable { let individual_limit: Limit? }
     struct Credits: Decodable { let has_credits: Bool?; let unlimited: Bool?; let balance: CodexNumber? }
     let account_id: String?
+    let plan_type: String?
     let rate_limit: RateLimit?
     let credits: Credits?
     let individual_limit: Limit?
     let spend_control: SpendControl?
+
+    var planLabel: String? {
+        guard let plan = plan_type?.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty else { return nil }
+        return ["free": "Free", "plus": "Plus", "pro": "Pro", "team": "Team", "business": "Business",
+                "enterprise": "Enterprise", "edu": "Edu", "go": "Go"][plan] ?? plan
+    }
 
     func metrics() throws -> [UsageMetric] {
         guard rate_limit != nil || credits != nil || individual_limit != nil || spend_control?.individual_limit != nil else {
@@ -264,6 +283,40 @@ private struct CodexUsage: Decodable {
         }
         if rows.isEmpty { rows.append(.init(title: "Quota", kind: .note, value: nil, detail: "No quota windows returned")) }
         return rows
+    }
+}
+
+private struct CodexResetInventory: Decodable {
+    struct Credit: Decodable {
+        let id: String
+        let reset_type: String
+        let status: String
+        let expires_at: String?
+    }
+    let available_count: Int
+    let credits: [Credit]
+
+    static func decode(_ data: Data) throws -> LimitResetCredits {
+        let inventory = try JSONDecoder().decode(Self.self, from: data)
+        guard inventory.available_count >= 0 else { throw MonitorError.invalidResponse }
+        var expirations: [Date] = []
+        for credit in inventory.credits {
+            if let raw = credit.expires_at {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                var date = formatter.date(from: raw)
+                if date == nil {
+                    formatter.formatOptions = [.withInternetDateTime]
+                    date = formatter.date(from: raw)
+                }
+                guard let date else { throw MonitorError.invalidResponse }
+                if credit.status == "available", credit.reset_type == "codex_rate_limits", date > Date() {
+                    expirations.append(date)
+                }
+            }
+        }
+        // The list may be partial. Keep the provider's count and only known future expiries.
+        return LimitResetCredits(availableCount: inventory.available_count, expirations: expirations.sorted())
     }
 }
 
