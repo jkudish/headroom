@@ -89,7 +89,7 @@ struct AccountSummaryView: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Text(metric.title).font(.callout.weight(.medium))
-                    Text(metric.value.map { "\($0.formatted(.number.precision(.fractionLength(0...1))))% left" } ?? "Unavailable")
+                    Text(metric.value == nil ? "Unavailable" : "\(MenuBarAccountImage.text(metric)) left")
                         .font(.callout.monospacedDigit()).foregroundStyle(metric.remainingColor)
                     Spacer(minLength: 0)
                 }
