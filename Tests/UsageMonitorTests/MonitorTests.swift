@@ -380,6 +380,113 @@ private actor ResetRecoveryFixture {
     }
 }
 
+@Test func claudeDisplaysSavedResetsAndSeparateDollarBalancesWithReadOnlyOAuth() async throws {
+    let client = ClaudeClient(credentials: { _ in
+        try Credential.decode(response(#"{"claudeAiOauth":{"accessToken":"fixture","scopes":["user:profile"]}}"#))
+    }, send: { request in
+        #expect(request.httpMethod == "GET")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture")
+        let payload: String
+        if request.url?.lastPathComponent == "profile" {
+            payload = #"{"account":{"uuid":"alice"},"organization":{"uuid":"org"}}"#
+        } else {
+            #expect(request.url?.query == "cedar_ember=1")
+            #expect(request.value(forHTTPHeaderField: "User-Agent")?.hasPrefix("claude-cli/") == true)
+            payload = #"{"five_hour":{"utilization":23},"extra_usage":{"is_enabled":true,"used_credits":1984,"monthly_limit":12500},"cedar_ember":{"eligible":true,"grants":[{"resets_left":3,"resets_total":4,"paused":false,"usable_now":false,"ends_at":"2100-01-01T00:00:00Z"},{"resets_left":2,"paused":false},{"resets_left":19,"paused":true},{"resets_left":9,"paused":false,"starts_at":"2100-01-01T00:00:00Z"},{"resets_left":4,"paused":false,"ends_at":"2020-01-01T00:00:00Z"}]},"iguana_necktie":{"limit_dollars":100,"used_dollars":20,"remaining_dollars":80.5,"resets_at":"2100-01-02T00:00:00Z"}}"#
+        }
+        return (response(payload), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    })
+    let snapshot = try await client.fetch(UUID())
+    #expect(snapshot.identity?.accountID == "alice")
+    #expect(snapshot.metrics.first?.value == 77)
+    #expect(snapshot.metrics.first { $0.title == "Extra usage spent" }?.value == 19.84)
+    #expect(snapshot.metrics.first { $0.title == "Extra usage cap" }?.value == 125)
+    let resets = try #require(snapshot.metrics.first { $0.title == "Available resets" })
+    #expect(resets.value == 5) // Saved count, not grant-record count or immediately usable count.
+    #expect(resets.kind == .count)
+    #expect(resets.resetsAt == nil) // Grant expiry is not a recurring quota reset.
+    #expect(resets.detail?.contains("expiry") == true)
+    let credits = try #require(snapshot.metrics.first { $0.title == "Cloud credits" })
+    #expect(credits.value == 80.5) // Already dollars, not cents; reported remaining wins.
+    #expect(credits.unit == "USD")
+    #expect(credits.kind == .balance)
+    #expect(credits.resetsAt == nil)
+    #expect(credits.detail?.hasPrefix("Expires") == true)
+}
+
+@Test func claudeCreditAvailabilityAndResetDateBoundariesStaySeparate() throws {
+    let now = ISO8601DateFormatter().date(from: "2030-01-01T00:00:00Z")!
+    let cases: [(String, Double?, String)] = [
+        (#"{"limit_dollars":100,"used_dollars":27.25}"#, 72.75, "Promotional"),
+        (#"{"limit_dollars":100,"remaining_dollars":0}"#, 0, "Promotional"),
+        (#"{"limit_dollars":100,"remaining_dollars":80.5,"locked_reason":"not_eligible"}"#, nil, "Unavailable"),
+        (#"{"limit_dollars":100,"remaining_dollars":80.5,"resets_at":"2030-01-01T00:00:00Z"}"#, nil, "Expired"),
+        (#"{"limit_dollars":100,"remaining_dollars":80.5,"resets_at":"2030-01-01T00:00:01Z"}"#, 80.5, "Expires")
+    ]
+    for (credits, expected, detail) in cases {
+        let data = response("""
+        {"cedar_ember":{"eligible":true,"grants":[
+          {"resets_left":2,"paused":false,"starts_at":"2030-01-01T00:00:00Z"},
+          {"resets_left":3,"paused":false,"ends_at":"2030-01-01T00:00:00Z"},
+          {"resets_left":7,"paused":false,"starts_at":"2030-01-01T00:00:01Z"}]},
+         "iguana_necktie":\(credits)}
+        """)
+        let snapshot = UsageSnapshot(identity: .init(accountID: "alice", organizationID: "org", email: "alice@example.test"),
+                                     usage: try JSONDecoder().decode(ClaudeUsage.self, from: data), fetchedAt: now)
+        #expect(snapshot.metrics.first { $0.title == "Available resets" }?.value == 2)
+        let money = try #require(snapshot.metrics.first { $0.title == "Cloud credits" })
+        #expect(money.value == expected)
+        #expect(money.detail?.contains(detail) == true)
+        #expect(money.resetsAt == nil)
+        #expect(snapshot.resetCredits == nil)
+    }
+}
+
+@Test func optionalClaudeInventoryFailuresNeverHideOrdinaryQuotasAndMoney() async throws {
+    let blocks = [
+        #""cedar_ember":null,"iguana_necktie":{}"#,
+        #""cedar_ember":{"eligible":false,"grants":[]},"iguana_necktie":null"#,
+        #""cedar_ember":{"eligible":1,"grants":[]},"iguana_necktie":{"limit_dollars":100,"remaining_dollars":true}"#,
+        #""cedar_ember":{"eligible":true,"grants":[{"resets_left":-1,"paused":false}]},"iguana_necktie":{"limit_dollars":100,"remaining_dollars":101}"#,
+        #""cedar_ember":{"eligible":true,"grants":[{"resets_left":1,"paused":false,"ends_at":"bad"}]},"iguana_necktie":{"limit_dollars":100,"remaining_dollars":10,"resets_at":"bad"}"#,
+        #""cedar_ember":{"eligible":true,"grants":[{"resets_left":1}]},"iguana_necktie":{"limit_dollars":100}"#,
+        #""cedar_ember":{"eligible":true,"grants":[{"resets_left":1,"resets_total":0,"paused":false}]},"iguana_necktie":{"limit_dollars":-1,"remaining_dollars":0}"#,
+        #""cedar_ember":{"eligible":true,"grants":[{"resets_left":9223372036854775807,"paused":false},{"resets_left":1,"paused":false}]},"iguana_necktie":{"limit_dollars":100,"used_dollars":-1}"#
+    ]
+    for block in blocks {
+        let client = ClaudeClient(credentials: { _ in
+            try Credential.decode(response(#"{"claudeAiOauth":{"accessToken":"fixture","scopes":["user:profile"]}}"#))
+        }, send: { request in
+            let payload = request.url?.lastPathComponent == "profile"
+                ? #"{"account":{"uuid":"alice"},"organization":{"uuid":"org"}}"#
+                : "{\"five_hour\":{\"utilization\":23},\"extra_usage\":{\"is_enabled\":true,\"used_credits\":1984},\(block)}"
+            return (response(payload), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        let snapshot = try await client.fetch(UUID())
+        #expect(snapshot.metrics.first?.value == 77)
+        #expect(snapshot.metrics.first { $0.title == "Extra usage spent" }?.value == 19.84)
+        #expect(!snapshot.metrics.contains { $0.title == "Available resets" || $0.title == "Cloud credits" })
+    }
+}
+
+@Test(arguments: [400, 403])
+func rejectedClaudeInventoryQueryFallsBackToTheSameAccountsOrdinaryUsage(_ status: Int) async throws {
+    let client = ClaudeClient(credentials: { _ in
+        try Credential.decode(response(#"{"claudeAiOauth":{"accessToken":"fixture","scopes":["user:profile"]}}"#))
+    }, send: { request in
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture")
+        let payload = request.url?.lastPathComponent == "profile"
+            ? #"{"account":{"uuid":"alice"},"organization":{"uuid":"org"}}"#
+            : #"{"five_hour":{"utilization":23},"extra_usage":{"is_enabled":true,"used_credits":1984}}"#
+        return (response(payload), HTTPURLResponse(url: request.url!, statusCode: request.url?.query == nil ? 200 : status, httpVersion: nil, headerFields: nil)!)
+    })
+    let snapshot = try await client.fetch(UUID())
+    #expect(snapshot.identity?.accountID == "alice")
+    #expect(snapshot.metrics.first?.value == 77)
+    #expect(snapshot.metrics.first { $0.title == "Extra usage spent" }?.value == 19.84)
+    #expect(snapshot.resetCredits == nil) // Claude display does not expose a Codex redemption handle.
+}
+
 @Test(arguments: ["null", "17", "{}"])
 func malformedOptionalClaudePlanDoesNotInvalidateUsageCredentials(_ plan: String) throws {
     let credential = try Credential.decode(response("""

@@ -74,7 +74,13 @@ struct ClaudeClient: Sendable {
         }
         guard let decoded = try? JSONDecoder().decode(Profile.self, from: profile),
               !decoded.account.uuid.isEmpty, !decoded.organization.uuid.isEmpty else { throw MonitorError.invalidResponse }
-        let usageData = try await request("usage", token: token)
+        let usageData: Data
+        do {
+            usageData = try await request("usage?cedar_ember=1", token: token)
+        } catch MonitorError.http(let status) where status == 400 || status == 403 {
+            // Older deployments may reject the optional inventory query. Preserve ordinary usage.
+            usageData = try await request("usage", token: token)
+        }
         guard let usage = try? JSONDecoder().decode(ClaudeUsage.self, from: usageData) else { throw MonitorError.invalidResponse }
         return UsageSnapshot(
             identity: AccountIdentity(accountID: decoded.account.uuid, organizationID: decoded.organization.uuid,
@@ -88,6 +94,7 @@ struct ClaudeClient: Sendable {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("claude-cli/2.1.291 (external, cli)", forHTTPHeaderField: "User-Agent")
         do {
             let (data, response) = try await send(request)
             guard response.statusCode == 200 else { throw MonitorError.http(response.statusCode) }

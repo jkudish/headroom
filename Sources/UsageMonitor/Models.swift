@@ -54,9 +54,30 @@ struct ClaudeUsage: Decodable, Sendable {
     let fiveHour: Window?
     let sevenDay: Window?
     let extraUsage: ExtraUsage?
+    let savedResets: SavedResets?
+    let cloudCredits: CloudCredits?
 
     enum CodingKeys: String, CodingKey {
         case fiveHour = "five_hour", sevenDay = "seven_day", extraUsage = "extra_usage"
+        case savedResets = "cedar_ember", cloudCredits = "iguana_necktie"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        fiveHour = try values.decodeIfPresent(Window.self, forKey: .fiveHour)
+        sevenDay = try values.decodeIfPresent(Window.self, forKey: .sevenDay)
+        extraUsage = try values.decodeIfPresent(ExtraUsage.self, forKey: .extraUsage)
+        // Supplemental blocks must never invalidate ordinary quotas or spending.
+        savedResets = try? values.decode(SavedResets.self, forKey: .savedResets)
+        cloudCredits = try? values.decode(CloudCredits.self, forKey: .cloudCredits)
+    }
+
+    private static func parseDate(_ raw: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: raw) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: raw)
     }
 
     struct Window: Decodable, Sendable {
@@ -73,12 +94,7 @@ struct ClaudeUsage: Decodable, Sendable {
         }
 
         var resetDate: Date? {
-            guard let resetsAt else { return nil }
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = formatter.date(from: resetsAt) { return date }
-            formatter.formatOptions = [.withInternetDateTime]
-            return formatter.date(from: resetsAt)
+            resetsAt.flatMap(ClaudeUsage.parseDate)
         }
 
         func formattedReset(timeZone: TimeZone = .current) -> String? {
@@ -99,6 +115,72 @@ struct ClaudeUsage: Decodable, Sendable {
 
         var spent: Double? { usedCredits.flatMap { $0 >= 0 && $0.isFinite ? $0 / 100 : nil } }
         var cap: Double? { monthlyLimit.flatMap { $0 >= 0 && $0.isFinite ? $0 / 100 : nil } }
+    }
+
+    struct SavedResets: Decodable, Sendable {
+        let eligible: Bool
+        let grants: [Grant]
+
+        // No redemption handles are decoded, persisted, or exposed to a Use action.
+        struct Grant: Decodable, Sendable {
+            let resetsLeft: Int
+            let resetsTotal: Int?
+            let paused: Bool
+            let startsAt: String?
+            let endsAt: String?
+            enum CodingKeys: String, CodingKey {
+                case resetsLeft = "resets_left", resetsTotal = "resets_total", paused
+                case startsAt = "starts_at", endsAt = "ends_at"
+            }
+        }
+
+        func metric(at now: Date) -> UsageMetric? {
+            guard eligible, grants.count <= 200 else { return nil }
+            var count = 0
+            var expirations: [Date] = []
+            for grant in grants {
+                let start = grant.startsAt.flatMap(ClaudeUsage.parseDate)
+                let end = grant.endsAt.flatMap(ClaudeUsage.parseDate)
+                guard grant.resetsLeft >= 0, grant.resetsTotal.map({ $0 >= grant.resetsLeft }) ?? true,
+                      grant.startsAt == nil || start != nil, grant.endsAt == nil || end != nil else { return nil }
+                guard !grant.paused, start.map({ $0 <= now }) ?? true, end.map({ $0 > now }) ?? true,
+                      grant.resetsLeft > 0 else { continue }
+                let sum = count.addingReportingOverflow(grant.resetsLeft)
+                guard !sum.overflow, sum.partialValue <= 9_007_199_254_740_991 else { return nil }
+                count = sum.partialValue
+                if let end { expirations.append(end) }
+            }
+            let expiry = expirations.min().map { " Next known expiry \($0.usageResetText())." } ?? ""
+            return .init(title: "Available resets", kind: .count, value: Double(count), unit: "resets",
+                         detail: "Saved resets; use may require reaching a limit.\(expiry)")
+        }
+    }
+
+    struct CloudCredits: Decodable, Sendable {
+        let limit: Double
+        let used: Double?
+        let remaining: Double?
+        let expiresAt: String?
+        let lockedReason: String?
+        enum CodingKeys: String, CodingKey {
+            case limit = "limit_dollars", used = "used_dollars", remaining = "remaining_dollars"
+            case expiresAt = "resets_at", lockedReason = "locked_reason"
+        }
+
+        func metric(at now: Date) -> UsageMetric? {
+            guard limit.isFinite, limit > 0,
+                  used.map({ $0.isFinite && (0...limit).contains($0) }) ?? true,
+                  remaining.map({ $0.isFinite && (0...limit).contains($0) }) ?? true,
+                  let balance = remaining ?? used.map({ limit - $0 }) else { return nil }
+            let expiry = expiresAt.flatMap(ClaudeUsage.parseDate)
+            guard expiresAt == nil || expiry != nil else { return nil }
+            let expired = expiry.map { $0 <= now } ?? false
+            let locked = lockedReason?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            let detail = expiry.map { "\(expired ? "Expired" : "Expires") \($0.usageResetText()). " } ?? ""
+            // These are already dollars. Expiry is not a recurring reset or an Extra usage wallet.
+            return .init(title: "Cloud credits", kind: .balance, value: expired || locked ? nil : balance,
+                         unit: "USD", detail: detail + (locked ? "Unavailable. " : "") + "Promotional cloud-session credits")
+        }
     }
 }
 
@@ -153,6 +235,8 @@ struct UsageSnapshot: Sendable {
             rows.append(.init(title: "Extra usage", kind: .note, value: nil,
                               detail: usage.extraUsage?.isEnabled == false ? "Disabled" : "Unavailable"))
         }
+        if let resets = usage.savedResets?.metric(at: fetchedAt) { rows.append(resets) }
+        if let credits = usage.cloudCredits?.metric(at: fetchedAt) { rows.append(credits) }
         metrics = rows
     }
 }
