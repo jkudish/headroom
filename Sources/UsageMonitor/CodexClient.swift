@@ -34,13 +34,37 @@ struct CodexClient: Sendable {
         ), metrics: metrics, plan: usage.planLabel, resetCredits: resets)
     }
 
-    private func request(_ path: String, credential: CodexCredential) async throws -> Data {
+    func consumeReset(_ account: Account, creditID: String, requestID: UUID) async throws -> ResetOutcome {
+        guard account.provider == .codex, let owner = account.identity,
+              let saved = try store.load().first(where: { $0.id == account.id }), saved.provider == .codex,
+              saved.identity?.matches(owner) == true else { throw MonitorError.invalidResponse }
+        let credential = try CodexCredential.decode(CodexProfile.authData(account.id, store: store))
+        guard credential.user == owner.accountID, credential.workspace == owner.organizationID else {
+            throw MonitorError.identityChanged
+        }
+        // Revalidate availability with this exact bearer before any finite-resource write.
+        let inventory = try CodexResetInventory.decode(try await request("wham/rate-limit-reset-credits", credential: credential))
+        guard inventory.availableCount > 0, inventory.credits.first(where: { $0.id == creditID })?.canUse == true else {
+            throw MonitorError.invalidResponse
+        }
+        let body = try JSONSerialization.data(withJSONObject: ["credit_id": creditID, "redeem_request_id": requestID.uuidString])
+        let data = try await request("wham/rate-limit-reset-credits/consume", credential: credential, body: body)
+        guard let outcome = try? JSONDecoder().decode(ResetOutcome.self, from: data) else { throw MonitorError.invalidResponse }
+        return outcome
+    }
+
+    private func request(_ path: String, credential: CodexCredential, body: Data? = nil) async throws -> Data {
         var request = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/\(path)")!)
+        if let body {
+            request.httpMethod = "POST"
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
         request.setValue("Bearer \(credential.token)", forHTTPHeaderField: "Authorization")
         request.setValue(credential.workspace, forHTTPHeaderField: "ChatGPT-Account-Id")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("codex-cli", forHTTPHeaderField: "User-Agent")
-        if path == "wham/rate-limit-reset-credits" {
+        if path.hasPrefix("wham/rate-limit-reset-credits") {
             request.setValue("codex-1", forHTTPHeaderField: "OpenAI-Beta")
             request.setValue("Codex Desktop", forHTTPHeaderField: "originator")
         }
@@ -259,7 +283,7 @@ private struct CodexUsage: Decodable {
 
     var planLabel: String? {
         guard let plan = plan_type?.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty else { return nil }
-        return ["free": "Free", "plus": "Plus", "pro": "Pro", "team": "Team", "business": "Business",
+        return ["free": "Free", "plus": "Plus", "pro": "Pro 200", "prolite": "Pro 100", "promax": "Pro 500", "team": "Team", "business": "Business",
                 "enterprise": "Enterprise", "edu": "Edu", "go": "Go"][plan] ?? plan
     }
 
@@ -291,32 +315,38 @@ private struct CodexResetInventory: Decodable {
         let id: String
         let reset_type: String
         let status: String
+        let granted_at: String?
         let expires_at: String?
+        let title: String?
+        let description: String?
     }
     let available_count: Int
     let credits: [Credit]
 
     static func decode(_ data: Data) throws -> LimitResetCredits {
         let inventory = try JSONDecoder().decode(Self.self, from: data)
-        guard inventory.available_count >= 0 else { throw MonitorError.invalidResponse }
-        var expirations: [Date] = []
-        for credit in inventory.credits {
-            if let raw = credit.expires_at {
-                let formatter = ISO8601DateFormatter()
-                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                var date = formatter.date(from: raw)
-                if date == nil {
-                    formatter.formatOptions = [.withInternetDateTime]
-                    date = formatter.date(from: raw)
-                }
-                guard let date else { throw MonitorError.invalidResponse }
-                if credit.status == "available", credit.reset_type == "codex_rate_limits", date > Date() {
-                    expirations.append(date)
-                }
-            }
+        guard inventory.available_count >= 0,
+              Set(inventory.credits.map(\.id)).count == inventory.credits.count else { throw MonitorError.invalidResponse }
+        let credits = try inventory.credits.map { credit in
+            guard !credit.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  credit.id.utf8.count <= 4096 else { throw MonitorError.invalidResponse }
+            return LimitResetCredit(id: credit.id, resetType: credit.reset_type, status: credit.status,
+                                    grantedAt: try date(credit.granted_at), expiresAt: try date(credit.expires_at),
+                                    title: credit.title, description: credit.description)
         }
         // The list may be partial. Keep the provider's count and only known future expiries.
-        return LimitResetCredits(availableCount: inventory.available_count, expirations: expirations.sorted())
+        return LimitResetCredits(availableCount: inventory.available_count,
+                                 expirations: credits.filter(\.canUse).compactMap(\.expiresAt).sorted(), credits: credits)
+    }
+
+    private static func date(_ raw: String?) throws -> Date? {
+        guard let raw else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: raw) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        guard let date = formatter.date(from: raw) else { throw MonitorError.invalidResponse }
+        return date
     }
 }
 

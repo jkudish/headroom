@@ -10,16 +10,8 @@ struct AccountSummaryView: View {
             HStack(alignment: .top, spacing: 9) {
                 ProviderIcon(provider: entry.account.provider).frame(width: 22, height: 22)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.account.displayName).font(.headline).lineLimit(1).truncationMode(.middle)
-                        .help(entry.account.displayName)
-                    if let identity = entry.account.identity {
-                        let identifier = identity.email.isEmpty || identity.email == "Email unavailable"
-                            ? identity.accountID : identity.email
-                        if identifier != entry.account.displayName {
-                            Text(identifier).font(.caption).foregroundStyle(.secondary)
-                                .lineLimit(1).truncationMode(.middle).help(identifier)
-                        }
-                    }
+                    Text(entry.displayName).font(.headline).lineLimit(1).truncationMode(.middle)
+                        .help(entry.displayName)
                     Text(entry.account.provider.title).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 4)
@@ -169,6 +161,7 @@ extension Provider {
         switch self {
         case .claude: name = "claude-logo"
         case .codex: name = "openai-logo"
+        case .amp: name = "amp-logo"
         default: return nil
         }
         return Bundle.module.url(forResource: name, withExtension: "png").flatMap(NSImage.init(contentsOf:))

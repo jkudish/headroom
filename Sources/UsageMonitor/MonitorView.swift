@@ -7,8 +7,7 @@ struct MonitorView: View {
     let demo: Bool
     let openWindow: () -> Void
     let connect: (Provider, Account?) -> Void
-    @State private var renaming: UUID?
-    @State private var editedLabel = ""
+    var showResets: (Account) -> Void = { _ in }
     @State private var code = ""
     @State private var error: String?
     @State private var removal: UUID?
@@ -67,14 +66,6 @@ struct MonitorView: View {
             }.buttonStyle(.borderless).padding(12)
         }
         .frame(minWidth: 340, minHeight: 440)
-        .alert("Account name", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("Name", text: $editedLabel)
-            Button("Cancel", role: .cancel) { renaming = nil }
-            Button("Save") {
-                if let id = renaming { perform { try monitor.rename(id, label: editedLabel) } }
-                renaming = nil
-            }
-        } message: { Text("Leave blank to use the name returned by the provider, when available.") }
         .alert("Remove this account?", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } })) {
             Button("Cancel", role: .cancel) { removal = nil }
             Button("Remove", role: .destructive) {
@@ -109,17 +100,23 @@ struct MonitorView: View {
             AccountSummaryView(entry: entry)
             HStack {
                 Button("Refresh") { Task { await monitor.refresh(entry.id) } }
-                    .buttonStyle(.borderless).disabled(demo || entry.refreshing || login.accountID != nil)
+                    .buttonStyle(.borderless).disabled(demo || entry.refreshing || entry.resetting || login.accountID != nil)
+                if entry.account.provider == .codex {
+                    Button("Reset details…") { showResets(entry.account) }
+                        .buttonStyle(.borderless).disabled(login.accountID != nil || entry.resetting)
+                }
                 Spacer()
                 Menu {
-                    Button("Rename account…") { editedLabel = entry.account.label; renaming = entry.id }
                     Button("Reconnect account…") { reconnect(entry.account) }
                     Link("Provider dashboard", destination: entry.account.provider.dashboardURL)
                     Button("Remove account", role: .destructive) { removal = entry.id }
                 } label: { Image(systemName: "ellipsis") }
-                .menuStyle(.borderlessButton).fixedSize().disabled(demo || login.accountID != nil)
-                .accessibilityLabel("Actions for \(entry.account.displayName)")
+                .menuStyle(.borderlessButton).fixedSize().disabled(demo || login.accountID != nil || entry.resetting)
+                .accessibilityLabel("Actions for \(entry.displayName)")
             }
+            Toggle("Show in menu bar", isOn: Binding(get: { entry.account.showInMenuBar }, set: { visible in
+                perform { try monitor.setMenuBarVisibility(entry.id, visible: visible) }
+            })).toggleStyle(.switch).controlSize(.small).disabled(demo)
             if entry.snapshot == nil {
                 HStack {
                     Button(entry.account.provider.usesHelper ? "Sign in" : "Enter credentials") { reconnect(entry.account) }
@@ -149,7 +146,13 @@ struct MonitorView: View {
                     Button("Copy login link") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.absoluteString, forType: .string) }
                 }
                 if let deviceCode = login.deviceCode {
-                    Text(deviceCode).font(.title2.monospaced().weight(.semibold)).textSelection(.enabled)
+                    HStack {
+                        Text(deviceCode).font(.title2.monospaced().weight(.semibold)).textSelection(.enabled)
+                        Button("Copy code", systemImage: "doc.on.doc") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(deviceCode, forType: .string)
+                        }.accessibilityIdentifier("copyDeviceCode")
+                    }
                     HStack { ProgressView().controlSize(.small); Text("Waiting for browser approval…") }
                 } else {
                     SecureField("Authorization code", text: $code).textFieldStyle(.roundedBorder).accessibilityIdentifier("authorizationCode")
@@ -164,6 +167,7 @@ struct MonitorView: View {
     }
 
     private func startLogin(_ id: UUID) {
+        guard !monitor.entries.contains(where: \.resetting) else { return }
         openWindow()
         perform {
             guard let provider = monitor.entries.first(where: { $0.id == id })?.account.provider else { return }

@@ -76,16 +76,19 @@ struct AdditionalClient: Sendable {
         }
         var metrics: [UsageMetric] = []
         var identity: AccountIdentity?
+        var reportedEmail: String?
         switch account.provider {
         case .amp:
             guard root["ok"] as? Bool == true, let result = root["result"] as? [String: Any],
                   let text = result["displayText"] as? String else { throw MonitorError.invalidResponse }
+            reportedEmail = capture(#"(?m)^Signed in as ([^\s@]+@[^\s@]+)\s*$"#, in: text).first
             let agent = capture(#"agent usage \$([0-9.]+) of \$([0-9.]+) remaining"#, in: text).compactMap(Double.init)
             let orb = capture(#"orb usage ([0-9.]+)h of ([0-9.]+)h a1\.small orb hours remaining"#, in: text).compactMap(Double.init)
             if agent.count == 2 {
                 metrics += [.init(title: "Agent", kind: .quota, value: percent(agent[0], limit: agent[1])),
                             .init(title: "Agent remaining", kind: .balance, value: agent[0], unit: "USD"),
-                            .init(title: "Agent allowance", kind: .cap, value: agent[1], unit: "USD")]
+                            .init(title: "Provider-reported agent cap", kind: .cap, value: agent[1], unit: "USD",
+                                  detail: "Included allowance reported by Amp; not your wallet balance or a subscription charge")]
             }
             if orb.count == 2 {
                 metrics += [.init(title: "Orb", kind: .quota, value: percent(orb[0], limit: orb[1])),
@@ -100,7 +103,7 @@ struct AdditionalClient: Sendable {
             }
             if metrics.isEmpty { throw MonitorError.invalidResponse }
             if agent.isEmpty { metrics.append(.init(title: "Agent allowance", kind: .note, value: nil, detail: "Not reported by this plan")) }
-            if orb.isEmpty { metrics.append(.init(title: "Orb allowance", kind: .note, value: nil, detail: "Not reported by this plan")) }
+            if orb.isEmpty { metrics.append(.init(title: "Orb usage", kind: .note, value: nil, detail: "Unavailable — not returned by Amp")) }
         case .grok:
             guard let config = root["config"] as? [String: Any] else { throw MonitorError.invalidResponse }
             let period = config["currentPeriod"] as? [String: Any] ?? [:]
@@ -165,7 +168,7 @@ struct AdditionalClient: Sendable {
                        .init(title: "Wallet balance", kind: .note, value: nil, detail: "Not returned by the Team Management usage API")]
         default: throw MonitorError.invalidResponse
         }
-        return UsageSnapshot(identity: identity, metrics: metrics)
+        return UsageSnapshot(identity: identity, metrics: metrics, reportedEmail: reportedEmail)
     }
 
     private func request(_ endpoint: String, secrets: ConnectionSecrets, method: String = "GET", body: Data? = nil,

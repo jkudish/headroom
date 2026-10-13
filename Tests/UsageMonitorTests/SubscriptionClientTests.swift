@@ -225,7 +225,7 @@ import Testing
                 #expect(request.value(forHTTPHeaderField: "OpenAI-Beta") == "codex-1")
                 return subscriptionResponse(request, """
                 {"available_count":3,"credits":[
-                  {"id":"one","reset_type":"codex_rate_limits","status":"available","expires_at":"2030-10-20T21:00:00.123Z"},
+                  {"id":"one","reset_type":"codex_rate_limits","status":"available","granted_at":"2026-10-13T21:00:00Z","expires_at":"2030-10-20T21:00:00.123Z","title":"One reset","description":"Resets Codex windows"},
                   {"id":"expired","reset_type":"codex_rate_limits","status":"available","expires_at":"2020-01-01T00:00:00Z"},
                   {"id":"used","reset_type":"codex_rate_limits","status":"redeemed","expires_at":"2030-10-15T21:00:00Z"}]}
                 """)
@@ -237,9 +237,14 @@ import Testing
             """)
         })
         let snapshot = try await client.fetch(id)
-        #expect(snapshot.plan == "Pro")
+        #expect(snapshot.plan == "Pro 200")
         #expect(snapshot.resetCredits?.availableCount == 3) // A partial list must not replace the reported count.
         #expect(snapshot.resetCredits?.expirations.count == 1)
+        #expect(snapshot.resetCredits?.credits.map(\.id) == ["one", "expired", "used"])
+        #expect(snapshot.resetCredits?.credits.first?.title == "One reset")
+        #expect(snapshot.resetCredits?.credits.first?.description == "Resets Codex windows")
+        #expect(snapshot.resetCredits?.credits.first?.grantedAt == Date(timeIntervalSince1970: 1791925200))
+        #expect(snapshot.resetCredits?.credits.map(\.canUse) == [true, false, false])
         let left = try #require(snapshot.metrics.first { $0.title == "Credits left" }?.value)
         #expect(abs(left - 49938.68) < 0.000001)
         #expect(snapshot.metrics.first { $0.title == "Individual credit quota" }?.resetsAt == Date(timeIntervalSince1970: 1792342800))
@@ -291,6 +296,96 @@ import Testing
         await #expect(throws: body.contains("wrong") ? MonitorError.identityChanged : .invalidResponse) {
             try await client.fetch(id)
         }
+    }
+
+    @Test(arguments: ["reset", "nothing_to_reset", "no_credit", "already_redeemed", "unknown", "malformed"])
+    func codexResetUsesExplicitCreditAndBearerBoundHuman(_ result: String) async throws {
+        let store = try subscriptionStore()
+        defer { try? FileManager.default.removeItem(at: store.root) }
+        let owner = AccountIdentity(accountID: "alice", organizationID: "shared", email: "alice@example.test")
+        let account = Account(label: "", identity: owner, provider: .codex)
+        try store.save([account])
+        let token = try writeCodexAuth(store, account.id, workspace: "shared", email: owner.email, humanID: "alice")
+        let attempt = UUID()
+        let client = CodexClient(store: store, http: ProviderHTTP { request in
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
+            #expect(request.value(forHTTPHeaderField: "ChatGPT-Account-Id") == "shared")
+            #expect(request.value(forHTTPHeaderField: "OpenAI-Beta") == "codex-1")
+            if request.httpMethod == "GET" { return subscriptionResponse(request, resetInventoryFixture) }
+            #expect(request.url?.absoluteString == "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume")
+            #expect(request.httpMethod == "POST")
+            #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+            let payload = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: String])
+            #expect(payload == ["credit_id": "selected-credit", "redeem_request_id": attempt.uuidString])
+            return subscriptionResponse(request, result == "malformed" ? "{\"code\":\"reset\",\"windows_reset\":-1}" : "{\"code\":\"\(result)\"}")
+        })
+        if ["unknown", "malformed"].contains(result) {
+            await #expect(throws: MonitorError.invalidResponse) { try await client.consumeReset(account, creditID: "selected-credit", requestID: attempt) }
+        } else {
+            let outcome = try await client.consumeReset(account, creditID: "selected-credit", requestID: attempt)
+            #expect(outcome.code.rawValue == result)
+            #expect(outcome.windowsReset == 0)
+        }
+        // Same workspace, different human: reject before even the inventory GET.
+        _ = try writeCodexAuth(store, account.id, workspace: "shared", email: "bob@example.test", humanID: "bob")
+        let denied = CodexClient(store: store, http: ProviderHTTP { _ in
+            Issue.record("Changed owner must not send reset requests")
+            throw MonitorError.network
+        })
+        await #expect(throws: MonitorError.identityChanged) { try await denied.consumeReset(account, creditID: "selected-credit", requestID: attempt) }
+    }
+
+    @Test @MainActor func resetRetryAfterRestartReusesAttemptAndNeverAnotherAccount() async throws {
+        let store = try subscriptionStore()
+        defer { try? FileManager.default.removeItem(at: store.root) }
+        let identity = AccountIdentity(accountID: "alice", organizationID: "shared", email: "alice@example.test")
+        let account = Account(label: "", identity: identity, provider: .codex)
+        try store.save([account])
+        _ = try writeCodexAuth(store, account.id, workspace: "shared", email: identity.email, humanID: "alice")
+        let ledger = ResetFixture()
+        let client = CodexClient(store: store, http: ProviderHTTP { request in
+            if request.httpMethod == "GET" { return subscriptionResponse(request, resetInventoryFixture) }
+            return try await ledger.send(request)
+        })
+        let credit = LimitResetCredit(id: "selected-credit", resetType: "codex_rate_limits", status: "available",
+                                    grantedAt: nil, expiresAt: nil, title: nil, description: nil)
+        let snapshot = UsageSnapshot(identity: identity, metrics: [], resetCredits: .init(availableCount: 1, expirations: [], credits: [credit]))
+        let monitor = try Monitor(store: store, fetch: { _ in snapshot }, consume: {
+            try await client.consumeReset($0, creditID: $1, requestID: $2)
+        })
+        await monitor.refresh(account.id)
+        await #expect(throws: MonitorError.network) { try await monitor.useReset(account.id, creditID: credit.id) }
+        let restarted = try Monitor(store: store, fetch: { _ in snapshot }, consume: {
+            try await client.consumeReset($0, creditID: $1, requestID: $2)
+        })
+        await restarted.refresh(account.id)
+        let outcome = try await restarted.useReset(account.id, creditID: credit.id)
+        #expect(outcome.code == .already_redeemed)
+        let requests = await ledger.requests
+        #expect(requests.count == 2)
+        #expect(requests[0] == requests[1])
+        #expect(requests[0]["credit_id"] == "selected-credit")
+        #expect(UUID(uuidString: requests[0]["redeem_request_id"] ?? "") != nil)
+        #expect(restarted.entries[0].resetting == false)
+        await #expect(throws: MonitorError.invalidResponse) { try await restarted.useReset(UUID(), creditID: credit.id) }
+        await #expect(throws: MonitorError.invalidResponse) { try await restarted.useReset(account.id, creditID: "not-in-inventory") }
+        #expect(await ledger.requests.count == 2)
+    }
+
+    @Test(arguments: ["redeemed", "expired", "wrong-type", "absent"])
+    func codexResetCannotUseUnavailableInventory(_ mode: String) async throws {
+        let store = try subscriptionStore()
+        defer { try? FileManager.default.removeItem(at: store.root) }
+        let account = Account(label: "", identity: .init(accountID: "alice", organizationID: "shared", email: "a@example.test"), provider: .codex)
+        try store.save([account])
+        _ = try writeCodexAuth(store, account.id, workspace: "shared", email: "a@example.test", humanID: "alice")
+        let client = CodexClient(store: store, http: ProviderHTTP { request in
+            #expect(request.httpMethod == "GET")
+            let expiry = mode == "expired" ? "2020-01-01T00:00:00Z" : "2030-01-01T00:00:00Z"
+            let list = mode == "absent" ? "[]" : "[{\"id\":\"selected-credit\",\"status\":\"\(mode == "redeemed" ? "redeemed" : "available")\",\"reset_type\":\"\(mode == "wrong-type" ? "other" : "codex_rate_limits")\",\"expires_at\":\"\(expiry)\"}]"
+            return subscriptionResponse(request, "{\"available_count\":1,\"credits\":\(list)}")
+        })
+        await #expect(throws: MonitorError.invalidResponse) { try await client.consumeReset(account, creditID: "selected-credit", requestID: UUID()) }
     }
 
     @Test func zaiUsesSelectedKeyAndAllowlistedRegionWithReturnedPeriodsAndMillisecondResets() async throws {
@@ -389,6 +484,18 @@ import Testing
 private func subscriptionStore() throws -> AccountStore {
     try AccountStore(root: FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
         .appendingPathComponent(UUID().uuidString))
+}
+
+private let resetInventoryFixture = #"{"available_count":1,"credits":[{"id":"decoy","reset_type":"other","status":"available"},{"id":"selected-credit","reset_type":"codex_rate_limits","status":"available"}]}"#
+
+private actor ResetFixture {
+    var requests: [[String: String]] = []
+    func send(_ request: URLRequest) throws -> (Data, HTTPURLResponse) {
+        let payload = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: String])
+        requests.append(payload)
+        if requests.count == 1 { throw MonitorError.network } // A server success with a lost response is also possible.
+        return subscriptionResponse(request, #"{"code":"already_redeemed","windows_reset":2}"#)
+    }
 }
 
 private func subscriptionResponse(_ request: URLRequest, _ body: String, status: Int = 200) -> (Data, HTTPURLResponse) {

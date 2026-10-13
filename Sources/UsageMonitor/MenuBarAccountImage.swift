@@ -13,6 +13,25 @@ import AppKit
         return value.formatted(.number.precision(.fractionLength(0...1)))
     }
 
+    static func make(_ entries: [AccountEntry], appearance: NSAppearance) -> NSImage {
+        let images = entries.filter { $0.account.showInMenuBar }.map { make($0, appearance: appearance) }
+        guard !images.isEmpty else {
+            return NSImage(systemSymbolName: "gauge.with.dots.needle.50percent", accessibilityDescription: "Usage Monitor")!
+        }
+        let gap: CGFloat = 10
+        let width = images.reduce(0) { $0 + $1.size.width } + gap * CGFloat(images.count - 1)
+        let image = NSImage(size: NSSize(width: width, height: 22))
+        image.lockFocus()
+        var x: CGFloat = 0
+        for part in images {
+            part.draw(in: NSRect(x: x, y: 0, width: part.size.width, height: 22))
+            x += part.size.width + gap
+        }
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
     static func make(_ entry: AccountEntry, appearance: NSAppearance) -> NSImage {
         let metrics = entry.menuBarMetrics
         let values = metrics.isEmpty ? [entry.refreshing ? "…" : "—"] : metrics.map(text)

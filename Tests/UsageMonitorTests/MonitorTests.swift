@@ -14,12 +14,13 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     let id = UUID()
     let old = try JSONDecoder().decode(Account.self, from: response("{\"id\":\"\(id)\",\"label\":\"Personal\"}"))
     #expect(old.id == id)
-    #expect(old.displayName == "Personal")
+    #expect(old.label == "Personal") // Preserve legacy data without using it as the heading.
+    #expect(old.displayName == "New Claude account")
     let codex = try JSONDecoder().decode(Account.self, from: response("{\"id\":\"\(id)\",\"label\":\"Work\",\"provider\":\"codex\"}"))
     let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(codex)) as? [String: Any])
     #expect(encoded["provider"] as? String == "codex")
     let unnamed = Account(label: "", identity: .init(accountID: "org", organizationID: "org", email: ""), provider: .parallel)
-    #expect(unnamed.displayName == "New Parallel account")
+    #expect(unnamed.displayName == "org")
 }
 
 @Test func enteredKeysStayOutOfMetadataAndSeparateAcrossAccounts() throws {
@@ -120,7 +121,7 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(first["ANTHROPIC_API_KEY"] == nil)
 }
 
-@Test @MainActor func newAccountsUseVerifiedNamesAndKeepCustomLabelsAfterRestart() async throws {
+@Test @MainActor func accountHeadingsUseEmailAndPreserveLegacyLabelsWithoutDisplayingThem() async throws {
     let store = try temporaryStore()
     defer { try? FileManager.default.removeItem(at: store.root) }
     let service = FixtureService()
@@ -132,11 +133,61 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(monitor.entries[0].account.displayName == "alice@example.test")
     try monitor.rename(id, label: "  Personal  ")
     await monitor.refresh(id)
-    #expect(monitor.entries[0].account.displayName == "Personal")
+    #expect(monitor.entries[0].account.displayName == "alice@example.test")
+    #expect(monitor.entries[0].account.label == "Personal")
     let restarted = try Monitor(store: store, fetch: { id in try await service.fetch(id) })
-    #expect(restarted.entries[0].account.displayName == "Personal")
+    #expect(restarted.entries[0].account.displayName == "alice@example.test")
     try restarted.rename(id, label: "")
     #expect(restarted.entries[0].account.displayName == "alice@example.test")
+}
+
+@Test @MainActor func menuBarVisibilityPersistsWithoutRemovingAccountsOrIdentity() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let owner = AccountIdentity(accountID: "alice", organizationID: "work", email: "alice@example.test")
+    let a = Account(label: "Legacy", identity: owner), b = Account(label: "", provider: .codex)
+    try store.save([a, b])
+    let monitor = try Monitor(store: store, fetch: { _ in throw MonitorError.network })
+    #expect(monitor.entries.allSatisfy { $0.account.showInMenuBar })
+    try monitor.setMenuBarVisibility(a.id, visible: false)
+    let restarted = try Monitor(store: store, fetch: { _ in throw MonitorError.network })
+    #expect(restarted.entries.map(\.id) == [a.id, b.id])
+    #expect(restarted.entries.map { $0.account.showInMenuBar } == [false, true])
+    #expect(restarted.entries[0].account.identity == owner)
+    #expect(restarted.entries[0].account.displayName == owner.email)
+    try restarted.setMenuBarVisibility(a.id, visible: true)
+    #expect(try store.load().allSatisfy(\.showInMenuBar))
+}
+
+@Test @MainActor func pendingResetRejectsDuplicateUseAndSurvivesAnotherAccountRemoval() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let first = Account(label: "First")
+    let owner = AccountIdentity(accountID: "alice", organizationID: "shared", email: "alice@example.test")
+    let selected = Account(label: "", identity: owner, provider: .codex)
+    try store.save([first, selected])
+    let credit = LimitResetCredit(id: "selected", resetType: "codex_rate_limits", status: "available",
+                                grantedAt: nil, expiresAt: nil, title: nil, description: nil)
+    let snapshot = UsageSnapshot(identity: owner, metrics: [], resetCredits: .init(availableCount: 1, expirations: [], credits: [credit]))
+    let gate = FixtureService()
+    try await gate.set(selected.id, identity: "alice", utilization: 13)
+    await gate.pause()
+    let monitor = try Monitor(store: store, fetch: { _ in snapshot }, consume: { account, _, _ in
+        _ = try await gate.fetch(account.id)
+        return try JSONDecoder().decode(ResetOutcome.self, from: response(#"{"code":"reset","windows_reset":2}"#))
+    })
+    await monitor.refresh(selected.id)
+    let reset = Task { try await monitor.useReset(selected.id, creditID: credit.id) }
+    await gate.waitUntilStarted()
+    await #expect(throws: MonitorError.invalidResponse) { try await monitor.useReset(selected.id, creditID: credit.id) }
+    #expect(throws: MonitorError.loginBusy) { try monitor.remove(selected.id) }
+    #expect(throws: MonitorError.loginBusy) { try monitor.reconnect(selected.id, secrets: .init(key: "not-saved")) }
+    try monitor.remove(first.id)
+    await gate.resume()
+    #expect(try await reset.value.windowsReset == 2)
+    #expect(monitor.entries.map(\.id) == [selected.id])
+    #expect(!monitor.entries[0].resetting)
+    #expect(monitor.entries[0].snapshot?.identity == owner)
 }
 
 @Test func limitColorsAndResetTextMatchTheDisplayedBoundaries() throws {
@@ -231,7 +282,7 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     let (alice, bob) = try await (first, second)
     #expect(alice.identity?.accountID == "alice")
     #expect(alice.identity?.email == "alice@example.test")
-    #expect(Account(label: "", identity: alice.identity).displayName == "Alice")
+    #expect(Account(label: "Custom", identity: alice.identity).displayName == "alice@example.test")
     #expect(alice.metrics.first?.value == 81)
     #expect(alice.plan == "Max 20x")
     #expect(bob.identity?.accountID == "bob")

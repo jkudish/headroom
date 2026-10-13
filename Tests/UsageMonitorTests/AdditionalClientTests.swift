@@ -16,6 +16,14 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     #expect(result.metrics.contains(.init(title: "Agent remaining", kind: .balance, value: 18.57, unit: "USD")))
     #expect(result.metrics.contains(.init(title: "Orb remaining", kind: .count, value: 732.8, unit: "a1.small hours")))
     #expect(result.metrics.contains(.init(title: "Individual credits", kind: .balance, value: 31.25, unit: "USD")))
+    #expect(result.reportedEmail == "test@example.test")
+    #expect(result.identity == nil) // Display metadata does not invent a stable owner ID.
+    #expect(result.metrics.first { $0.kind == .cap && $0.unit == "USD" }?.title == "Provider-reported agent cap")
+    let missingOrb = try await AdditionalClient(http: additionalHTTP(#"{"ok":true,"result":{"displayText":"agent usage $55.02 of $600 remaining\nIndividual credits: $17 remaining"}}"#))
+        .fetch(Account(label: "", provider: .amp), secrets: .init(key: "fixture-amp"))
+    #expect(missingOrb.metrics.first { $0.title == "Provider-reported agent cap" }?.value == 600)
+    #expect(missingOrb.metrics.first { $0.title == "Orb usage" }?.detail == "Unavailable — not returned by Amp")
+    #expect(!missingOrb.metrics.contains { $0.title == "Orb" && $0.value != nil })
 }
 
 @Test func grokConvertsCentsButDoesNotInventASecondWindow() async throws {

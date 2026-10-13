@@ -6,7 +6,6 @@ struct ConnectionView: View {
     let account: Account?
     let demo: Bool
     let finish: () -> Void
-    @State private var name = ""
     @State private var key = ""
     @State private var username = ""
     @State private var selector = ""
@@ -21,7 +20,6 @@ struct ConnectionView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Link("Open provider dashboard", destination: provider.dashboardURL)
             if provider.supportsRead && !provider.usesHelper {
-                if account == nil { TextField("Account name (optional)", text: $name) }
                 if provider == .dataForSEO { TextField("API login", text: $username) }
                 SecureField(provider == .dataForSEO ? "API password" : provider == .cursor ? "Cursor session Cookie header" : "API key or access token", text: $key)
                     .accessibilityIdentifier("connectionCredential")
@@ -81,7 +79,7 @@ struct ConnectionView: View {
                 if provider == .zai { options["region"] = region }
                 if provider == .exa { options["keyID"] = selector.trimmingCharacters(in: .whitespacesAndNewlines) }
                 if provider == .openAIAPI { options["organizationID"] = selector.trimmingCharacters(in: .whitespacesAndNewlines) }
-                id = try monitor.add(label: name, provider: provider, options: options, secrets: secrets)
+                id = try monitor.add(label: "", provider: provider, options: options, secrets: secrets)
             }
             key = ""; username = ""
             finish()

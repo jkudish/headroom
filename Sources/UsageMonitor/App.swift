@@ -15,10 +15,9 @@ enum UsageMonitorApp {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private var statusItems: [UUID: NSStatusItem] = [:]
-    private var emptyStatus: NSStatusItem?
-    private var appearanceObservations: [UUID: NSKeyValueObservation] = [:]
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+    private var status: NSStatusItem?
+    private var appearanceObservation: NSKeyValueObservation?
     private var window: NSWindow?
     private var connectionWindow: NSWindow?
     private var monitor: Monitor?
@@ -27,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let demo = CommandLine.arguments.contains("--demo")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installApplicationMenu()
         do {
             let store: AccountStore
             if demo {
@@ -62,11 +62,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func view(_ monitor: Monitor) -> MonitorView {
         MonitorView(monitor: monitor, login: login, demo: demo,
                     openWindow: { [weak self] in self?.openWindow() },
-                    connect: { [weak self] provider, account in self?.openConnection(provider, account: account) })
+                    connect: { [weak self] provider, account in self?.openConnection(provider, account: account) },
+                    showResets: { [weak self] account in self?.openResetDetails(account) })
     }
 
     private func openConnection(_ provider: Provider, account: Account?) {
-        guard let monitor else { return }
+        guard let monitor, !monitor.entries.contains(where: \.resetting) else { return }
         openWindow()
         if provider.usesHelper {
             guard !demo, login.accountID == nil else { return }
@@ -84,16 +85,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
-        guard connectionWindow == nil, let window else { return }
+        guard connectionWindow == nil else { return }
         let form = ConnectionView(monitor: monitor, provider: provider, account: account, demo: demo) { [weak self] in
-            guard let self, let sheet = self.connectionWindow else { return }
-            self.window?.endSheet(sheet)
-            self.connectionWindow = nil
+            self?.closeSheet()
         }
-        let content = NSHostingView(rootView: form)
+        presentSheet(provider.title, content: form)
+    }
+
+    private func openResetDetails(_ account: Account) {
+        guard let monitor, account.provider == .codex, login.accountID == nil, connectionWindow == nil else { return }
+        openWindow()
+        presentSheet("Limit Reset Credits", content: ResetCreditsView(monitor: monitor, accountID: account.id, demo: demo) { [weak self] in
+            self?.closeSheet()
+        })
+    }
+
+    private func closeSheet() {
+        guard let sheet = connectionWindow else { return }
+        window?.endSheet(sheet)
+        connectionWindow = nil
+    }
+
+    private func presentSheet<V: View>(_ title: String, content view: V) {
+        guard connectionWindow == nil, let window else { return }
+        let content = NSHostingView(rootView: view)
         let sheet = NSWindow(contentRect: NSRect(origin: .zero, size: content.fittingSize),
                              styleMask: [.titled], backing: .buffered, defer: false)
-        sheet.title = provider.title
+        sheet.title = title
         sheet.contentView = content
         sheet.isReleasedWhenClosed = false
         connectionWindow = sheet
@@ -115,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func observeAccounts() {
         withObservationTracking {
-            updateStatusItems()
+            updateStatusItem()
             _ = login.accountID
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeAccounts() }
@@ -131,34 +149,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
-    private func updateStatusItems() {
+    private func updateStatusItem() {
         guard let monitor else { return }
-        for id in Array(statusItems.keys) where !monitor.entries.contains(where: { $0.id == id }) {
-            appearanceObservations[id] = nil
-            if let item = statusItems.removeValue(forKey: id) { NSStatusBar.system.removeStatusItem(item) }
-        }
-        if monitor.entries.isEmpty {
-            if emptyStatus == nil { emptyStatus = newStatusItem() }
-            emptyStatus?.button?.image = NSImage(systemSymbolName: "gauge.with.dots.needle.50percent", accessibilityDescription: "Usage Monitor")
-        } else if let emptyStatus {
-            NSStatusBar.system.removeStatusItem(emptyStatus)
-            self.emptyStatus = nil
-        }
-        for entry in monitor.entries {
-            let item = statusItems[entry.id] ?? newStatusItem()
-            statusItems[entry.id] = item
-            guard let button = item.button else { continue }
-            if appearanceObservations[entry.id] == nil {
-                appearanceObservations[entry.id] = button.observe(\.effectiveAppearance) { [weak self] _, _ in
-                    Task { @MainActor in self?.updateStatusItems() }
-                }
+        if status == nil { status = newStatusItem() }
+        guard let button = status?.button else { return }
+        if appearanceObservation == nil {
+            appearanceObservation = button.observe(\.effectiveAppearance) { [weak self] _, _ in
+                Task { @MainActor in self?.updateStatusItem() }
             }
-            button.image = MenuBarAccountImage.make(entry, appearance: button.effectiveAppearance)
-            let readings = entry.menuBarMetrics.map { "\($0.title): \(MenuBarAccountImage.text($0))" }.joined(separator: ", ")
-            let label = "\(entry.account.provider.title) — \(entry.account.displayName): \(readings.isEmpty ? entry.error ?? "Usage unavailable" : readings)"
-            button.toolTip = label
-            button.setAccessibilityLabel(label)
         }
+        button.image = MenuBarAccountImage.make(monitor.entries, appearance: button.effectiveAppearance)
+        let labels = monitor.entries.filter { $0.account.showInMenuBar }.map { entry in
+            let readings = entry.menuBarMetrics.map { "\($0.title): \(MenuBarAccountImage.text($0))" }.joined(separator: ", ")
+            return "\(entry.account.provider.title) — \(entry.displayName): \(readings.isEmpty ? entry.error ?? "Usage unavailable" : readings)"
+        }
+        let label = labels.isEmpty ? "Usage Monitor — open all accounts" : labels.joined(separator: "\n")
+        button.toolTip = nil
+        button.setAccessibilityLabel(label)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -180,12 +187,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let actions = NSMenuItem(title: "Account actions", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             submenu.autoenablesItems = false
-            let idle = !demo && login.accountID == nil && !entry.refreshing
+            let idle = !demo && login.accountID == nil && !entry.refreshing && !entry.resetting
             addItem("Refresh account", to: submenu, action: #selector(refreshAccount), represented: entry.id.uuidString, enabled: idle)
             addItem(entry.account.provider.usesHelper ? "Sign in / reconnect…" : "Update credentials…", to: submenu,
                     action: #selector(reconnectAccount), represented: entry.id.uuidString, enabled: idle)
             addItem("Provider dashboard", to: submenu, action: #selector(openDashboard), represented: entry.id.uuidString)
-            addItem("Rename or remove…", to: submenu, action: #selector(showAccountWindow))
+            if entry.account.provider == .codex {
+                addItem("Reset details / use…", to: submenu, action: #selector(showResetDetails),
+                        represented: entry.id.uuidString, enabled: login.accountID == nil && !entry.resetting)
+            }
+            addItem("Account settings…", to: submenu, action: #selector(showAccountWindow))
             actions.submenu = submenu
             menu.addItem(actions)
             menu.addItem(.separator())
@@ -241,10 +252,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { for entry in monitor.entries { await monitor.refresh(entry.id) } }
     }
     @objc private func showAccountWindow() { openWindow() }
+    @objc private func showResetDetails(_ sender: NSMenuItem) {
+        if let account = selectedAccount(sender) { openResetDetails(account) }
+    }
     @objc private func quit() { login.cancel(); NSApplication.shared.terminate(nil) }
+
+    private func installApplicationMenu() {
+        let main = NSMenu()
+        let application = NSMenuItem()
+        let appMenu = NSMenu()
+        let quit = NSMenuItem(title: "Quit Usage Monitor", action: #selector(quit), keyEquivalent: "q")
+        quit.target = self
+        appMenu.addItem(quit)
+        application.submenu = appMenu
+        main.addItem(application)
+        let edit = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: "Edit")
+        for (title, action, key) in [("Undo", "undo:", "z"), ("Cut", "cut:", "x"),
+                                     ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
+            editMenu.addItem(NSMenuItem(title: title, action: NSSelectorFromString(action), keyEquivalent: key))
+        }
+        edit.submenu = editMenu
+        main.addItem(edit)
+        NSApplication.shared.mainMenu = main
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if let closed = notification.object as? NSWindow, closed === window {
+            NSApplication.shared.setActivationPolicy(.accessory)
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openWindow()
+        return true
+    }
 
     private func openWindow() {
         guard let monitor else { return }
+        NSApplication.shared.setActivationPolicy(.regular)
         if window == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 720),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
@@ -252,9 +298,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             window.contentView = NSHostingView(rootView: view(monitor))
             window.minSize = NSSize(width: 360, height: 480)
             window.isReleasedWhenClosed = false
+            window.delegate = self
             window.center()
             self.window = window
         }
+        window?.deminiaturize(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
@@ -274,11 +322,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                            .init(title: "Individual credit quota", kind: .quota, value: 49.93868, resetsAt: reset),
                                            .init(title: "Credits left", kind: .balance, value: 49938.68, unit: "credits"),
                                            .init(title: "Credit limit", kind: .cap, value: 100000, unit: "credits")],
-                                 plan: "Pro", resetCredits: .init(availableCount: 3, expirations: [reset.addingTimeInterval(7 * 86400)]))
+                                 plan: "Pro 200", resetCredits: .init(availableCount: 3, expirations: [reset.addingTimeInterval(7 * 86400)], credits: [
+                                    .init(id: "demo-reset-1", resetType: "codex_rate_limits", status: "available",
+                                          grantedAt: Date().addingTimeInterval(-86400), expiresAt: reset.addingTimeInterval(7 * 86400),
+                                          title: "Codex limit reset", description: "A fixture credit for preview only."),
+                                    .init(id: "demo-reset-used", resetType: "codex_rate_limits", status: "redeemed",
+                                          grantedAt: nil, expiresAt: nil, title: "Used reset", description: nil)
+                                 ]))
         case .amp:
             return UsageSnapshot(metrics: [.init(title: "Agent remaining", kind: .balance, value: 18.57, unit: "USD"),
+                                           .init(title: "Provider-reported agent cap", kind: .cap, value: 600, unit: "USD",
+                                                 detail: "Included allowance reported by Amp; not your wallet balance or a subscription charge"),
                                            .init(title: "Orb remaining", kind: .count, value: 732.8, unit: "a1.small hours"),
-                                           .init(title: "Individual credits", kind: .balance, value: 31.25, unit: "USD")])
+                                           .init(title: "Individual credits", kind: .balance, value: 31.25, unit: "USD")], reportedEmail: "amp@example.test")
         case .openRouter:
             return UsageSnapshot(metrics: [.init(title: "Wallet credits", kind: .balance, value: 37.82, unit: "USD")])
         default: break

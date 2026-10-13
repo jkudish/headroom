@@ -28,10 +28,14 @@ struct Account: Codable, Identifiable, Equatable, Sendable {
     }
 
     var displayName: String {
-        if !label.isEmpty { return label }
-        if let name = identity?.name, !name.isEmpty { return name }
-        if let email = identity?.email, !email.isEmpty { return email }
+        if let email = identity?.email, !email.isEmpty, email != "Email unavailable" { return email }
+        if let id = identity?.accountID, !id.isEmpty { return id }
         return "New \(provider.title) account"
+    }
+
+    var showInMenuBar: Bool {
+        get { options["showInMenuBar"] != "false" }
+        set { options["showInMenuBar"] = newValue ? "true" : "false" }
     }
 }
 
@@ -119,14 +123,16 @@ struct UsageSnapshot: Sendable {
     let fetchedAt: Date
     let plan: String?
     let resetCredits: LimitResetCredits?
+    let reportedEmail: String?
 
     init(identity: AccountIdentity? = nil, metrics: [UsageMetric], fetchedAt: Date = Date(),
-         plan: String? = nil, resetCredits: LimitResetCredits? = nil) {
+         plan: String? = nil, resetCredits: LimitResetCredits? = nil, reportedEmail: String? = nil) {
         self.identity = identity
         self.metrics = metrics
         self.fetchedAt = fetchedAt
         self.plan = plan
         self.resetCredits = resetCredits
+        self.reportedEmail = reportedEmail
     }
 
     init(identity: AccountIdentity, usage: ClaudeUsage, fetchedAt: Date, plan: String? = nil) {
@@ -134,6 +140,7 @@ struct UsageSnapshot: Sendable {
         self.fetchedAt = fetchedAt
         self.plan = plan
         resetCredits = nil
+        reportedEmail = nil
         var rows = [UsageMetric(title: "5-hour", kind: .quota, value: usage.fiveHour?.remaining,
                                resetsAt: usage.fiveHour?.resetDate),
                     UsageMetric(title: "Weekly", kind: .quota, value: usage.sevenDay?.remaining,
@@ -153,6 +160,45 @@ struct UsageSnapshot: Sendable {
 struct LimitResetCredits: Sendable {
     let availableCount: Int
     let expirations: [Date]
+    var credits: [LimitResetCredit] = []
+}
+
+struct LimitResetCredit: Identifiable, Equatable, Sendable {
+    let id: String
+    let resetType: String
+    let status: String
+    let grantedAt: Date?
+    let expiresAt: Date?
+    let title: String?
+    let description: String?
+
+    var canUse: Bool {
+        status == "available" && resetType == "codex_rate_limits" && (expiresAt.map { $0 > Date() } ?? true)
+    }
+}
+
+struct ResetOutcome: Decodable, Sendable {
+    enum Code: String, Decodable, Sendable { case reset, nothing_to_reset, no_credit, already_redeemed }
+    let code: Code
+    let windowsReset: Int
+
+    enum CodingKeys: String, CodingKey { case code, windowsReset = "windows_reset" }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        code = try values.decode(Code.self, forKey: .code)
+        windowsReset = try values.decodeIfPresent(Int.self, forKey: .windowsReset) ?? 0
+        guard windowsReset >= 0 else { throw MonitorError.invalidResponse }
+    }
+
+    var message: String {
+        switch code {
+        case .reset: "Reset applied (\(windowsReset) windows reported)."
+        case .nothing_to_reset: "No limits needed resetting."
+        case .no_credit: "The selected reset credit is no longer available."
+        case .already_redeemed: "This request or credit was already redeemed. No second reset was requested."
+        }
+    }
 }
 
 struct Credential: Decodable, Sendable {

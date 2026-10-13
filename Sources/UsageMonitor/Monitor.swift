@@ -6,7 +6,10 @@ struct AccountEntry: Identifiable {
     var snapshot: UsageSnapshot?
     var error: String?
     var refreshing = false
+    var resetting = false
     var id: UUID { account.id }
+
+    var displayName: String { snapshot?.reportedEmail ?? account.displayName }
 
     var menuBarMetrics: [UsageMetric] {
         let metrics = snapshot?.metrics ?? []
@@ -24,11 +27,16 @@ final class Monitor {
     private(set) var entries: [AccountEntry]
     let store: AccountStore
     private let fetch: @Sendable (UUID) async throws -> UsageSnapshot
+    private let consume: @Sendable (Account, String, UUID) async throws -> ResetOutcome
     private var requests: [UUID: UUID] = [:]
 
-    init(store: AccountStore, fetch: @escaping @Sendable (UUID) async throws -> UsageSnapshot) throws {
+    init(store: AccountStore, fetch: @escaping @Sendable (UUID) async throws -> UsageSnapshot,
+         consume: (@Sendable (Account, String, UUID) async throws -> ResetOutcome)? = nil) throws {
         self.store = store
         self.fetch = fetch
+        self.consume = consume ?? { account, credit, request in
+            try await CodexClient(store: store).consumeReset(account, creditID: credit, requestID: request)
+        }
         entries = try store.load().map { AccountEntry(account: $0) }
     }
 
@@ -50,6 +58,7 @@ final class Monitor {
 
     func reconnect(_ id: UUID, secrets: ConnectionSecrets) throws {
         guard entries.contains(where: { $0.id == id }) else { return }
+        guard entries.first(where: { $0.id == id })?.resetting != true else { throw MonitorError.loginBusy }
         try store.saveSecrets(secrets, for: id)
         beginLogin(id)
     }
@@ -62,8 +71,47 @@ final class Monitor {
         entries[index].account = accounts[index]
     }
 
+    func setMenuBarVisibility(_ id: UUID, visible: Bool) throws {
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+        var accounts = entries.map(\.account)
+        accounts[index].showInMenuBar = visible
+        try store.save(accounts)
+        entries[index].account = accounts[index]
+    }
+
+    func useReset(_ id: UUID, creditID: String) async throws -> ResetOutcome {
+        guard let index = entries.firstIndex(where: { $0.id == id }),
+              entries[index].account.provider == .codex, !entries[index].refreshing, !entries[index].resetting,
+              let owner = entries[index].account.identity,
+              entries[index].snapshot?.identity?.matches(owner) == true,
+              entries[index].snapshot?.resetCredits?.credits.first(where: { $0.id == creditID })?.canUse == true else {
+            throw MonitorError.invalidResponse
+        }
+        let key = "resetAttempt:\(creditID)"
+        var accounts = entries.map(\.account)
+        let requestID: UUID
+        if let saved = accounts[index].options[key] {
+            guard let parsed = UUID(uuidString: saved) else { throw MonitorError.invalidProfile }
+            requestID = parsed
+        } else {
+            requestID = UUID()
+            accounts[index].options[key] = requestID.uuidString
+            // Persist before sending. A lost response or restart must reuse this request.
+            try store.save(accounts)
+            entries[index].account = accounts[index]
+        }
+        entries[index].resetting = true
+        defer { if let current = entries.firstIndex(where: { $0.id == id }) { entries[current].resetting = false } }
+        let outcome = try await consume(accounts[index], creditID, requestID)
+        guard let current = entries.firstIndex(where: { $0.id == id }) else { throw MonitorError.invalidResponse }
+        entries[current].resetting = false
+        await refresh(id)
+        return outcome
+    }
+
     func remove(_ id: UUID) throws {
         guard entries.contains(where: { $0.id == id }) else { return }
+        guard entries.first(where: { $0.id == id })?.resetting != true else { throw MonitorError.loginBusy }
         try store.deleteProfile(id)
         try store.save(entries.filter { $0.id != id }.map(\.account))
         requests[id] = nil
@@ -71,15 +119,15 @@ final class Monitor {
     }
 
     func beginLogin(_ id: UUID) {
+        guard let index = entries.firstIndex(where: { $0.id == id }), !entries[index].resetting else { return }
         requests[id] = nil
-        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
         entries[index].snapshot = nil
         entries[index].error = nil
         entries[index].refreshing = false
     }
 
     func refresh(_ id: UUID) async {
-        guard let index = entries.firstIndex(where: { $0.id == id }), !entries[index].refreshing else { return }
+        guard let index = entries.firstIndex(where: { $0.id == id }), !entries[index].refreshing, !entries[index].resetting else { return }
         let requestID = UUID()
         requests[id] = requestID
         entries[index].refreshing = true
