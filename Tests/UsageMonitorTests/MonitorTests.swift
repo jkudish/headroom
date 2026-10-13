@@ -190,6 +190,56 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(monitor.entries[0].snapshot?.identity == owner)
 }
 
+@Test @MainActor func uncertainResetBlocksAnotherCreditUntilSuccessfulRefresh() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let owner = AccountIdentity(accountID: "alice", organizationID: "shared", email: "alice@example.test")
+    let account = Account(label: "", identity: owner, provider: .codex)
+    try store.save([account])
+    let credits = ["A", "B"].map {
+        LimitResetCredit(id: $0, resetType: "codex_rate_limits", status: "available", grantedAt: nil,
+                         expiresAt: nil, title: nil, description: nil)
+    }
+    let snapshot = UsageSnapshot(identity: owner, metrics: [.init(title: "Weekly", kind: .quota, value: 0)],
+                                 resetCredits: .init(availableCount: 2, expirations: [], credits: credits))
+    let service = ResetRecoveryFixture(snapshot)
+    let monitor = try Monitor(store: store, fetch: { _ in try await service.fetch() },
+                              consume: { _, credit, _ in try await service.consume(credit) })
+    await monitor.refresh(account.id)
+    await #expect(throws: MonitorError.network) { try await monitor.useReset(account.id, creditID: "A") }
+    await #expect(throws: MonitorError.invalidResponse) { try await monitor.useReset(account.id, creditID: "B") }
+    #expect(await service.sent == ["A"])
+    await service.failRefresh(true)
+    await monitor.refresh(account.id)
+    await #expect(throws: MonitorError.invalidResponse) { try await monitor.useReset(account.id, creditID: "B") }
+    #expect(await service.sent == ["A"])
+    let restarted = try Monitor(store: store, fetch: { _ in try await service.fetch() },
+                                consume: { _, credit, _ in try await service.consume(credit) })
+    await restarted.refresh(account.id)
+    await #expect(throws: MonitorError.invalidResponse) { try await restarted.useReset(account.id, creditID: "B") }
+    #expect(await service.sent == ["A"])
+    await service.failRefresh(false)
+    await restarted.refresh(account.id)
+    await #expect(throws: MonitorError.network) { try await restarted.useReset(account.id, creditID: "B") }
+    #expect(await service.sent == ["A", "B"])
+}
+
+private actor ResetRecoveryFixture {
+    let snapshot: UsageSnapshot
+    var failing = false
+    private(set) var sent: [String] = []
+    init(_ snapshot: UsageSnapshot) { self.snapshot = snapshot }
+    func failRefresh(_ failing: Bool) { self.failing = failing }
+    func fetch() throws -> UsageSnapshot {
+        if failing { throw MonitorError.network }
+        return snapshot
+    }
+    func consume(_ credit: String) throws -> ResetOutcome {
+        sent.append(credit)
+        throw MonitorError.network
+    }
+}
+
 @Test func limitColorsAndResetTextMatchTheDisplayedBoundaries() throws {
     func window(_ used: Double) -> ClaudeUsage.Window { .init(utilization: used, resetsAt: "2026-10-16T04:00:00Z") }
     #expect(window(100).remainingColor == .red)

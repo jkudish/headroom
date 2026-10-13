@@ -102,7 +102,15 @@ final class Monitor {
         }
         entries[index].resetting = true
         defer { if let current = entries.firstIndex(where: { $0.id == id }) { entries[current].resetting = false } }
-        let outcome = try await consume(accounts[index], creditID, requestID)
+        let outcome: ResetOutcome
+        do { outcome = try await consume(accounts[index], creditID, requestID) }
+        catch {
+            if let current = entries.firstIndex(where: { $0.id == id }) {
+                entries[current].snapshot = nil
+                entries[current].error = "Reset result unavailable. Refresh this account before using a reset."
+            }
+            throw error
+        }
         guard let current = entries.firstIndex(where: { $0.id == id }) else { throw MonitorError.invalidResponse }
         entries[current].resetting = false
         await refresh(id)

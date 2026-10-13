@@ -59,7 +59,7 @@ struct ResetCreditsView: View {
                 Task {
                     do { result = try await monitor.useReset(accountID, creditID: credit.id).message }
                     catch {
-                        result = "No reset result confirmed. \((error as? MonitorError)?.localizedDescription ?? "Could not save the request.") Refresh to check before using another credit. Retrying this credit reuses the same request."
+                        result = "No reset result confirmed. \((error as? MonitorError)?.localizedDescription ?? "Could not save the request.") Refresh to check the outcome before trying again. If this credit remains available, a retry reuses the same request."
                     }
                 }
             }.disabled(demo || entry?.resetting == true || entry?.refreshing == true)
