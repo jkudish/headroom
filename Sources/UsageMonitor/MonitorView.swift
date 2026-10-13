@@ -24,7 +24,9 @@ struct MonitorView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
+                addAccountMenu
                 Button { openWindow() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+                    .buttonStyle(.borderless)
                     .help("Open account window").accessibilityLabel("Open account window")
             }.padding(18)
             Divider()
@@ -42,25 +44,18 @@ struct MonitorView: View {
                                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }.frame(maxWidth: .infinity).padding(.vertical, 26)
                     }
-                    if login.accountID != nil { loginCard }
-                    ForEach(monitor.entries) { entry in accountCard(entry) }
+                    if login.accountID != nil {
+                        loginSection
+                        Divider()
+                    }
+                    ForEach(monitor.entries) { entry in
+                        accountSection(entry)
+                        if entry.id != monitor.entries.last?.id { Divider() }
+                    }
                     if let message = error ?? login.error {
                         Label(message, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Divider()
-                    Menu {
-                        ForEach(Provider.allCases.filter(\.supportsRead)) { provider in
-                            Button(provider.title) { addProvider(provider) }
-                        }
-                        Divider()
-                        Menu("Dashboard only — not connected yet") {
-                            ForEach(Provider.allCases.filter { !$0.supportsRead }) { provider in
-                                Button(provider.title) { connect(provider, nil) }
-                            }
-                        }
-                    } label: { Label("Add account", systemImage: "plus") }
-                        .disabled(login.accountID != nil).accessibilityIdentifier("addAccount")
                 }.padding(18)
             }
             Divider()
@@ -70,7 +65,7 @@ struct MonitorView: View {
                 }.disabled(demo || login.accountID != nil || monitor.entries.isEmpty || monitor.entries.contains(where: \.refreshing))
                 Spacer()
                 Button("Quit") { login.cancel(); NSApplication.shared.terminate(nil) }
-            }.padding(12)
+            }.buttonStyle(.borderless).padding(12)
         }
         .frame(minWidth: 340, minHeight: 440)
         .alert("Account name", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
@@ -91,7 +86,26 @@ struct MonitorView: View {
         .onChange(of: login.accountID) { _, _ in code = "" }
     }
 
-    private func accountCard(_ entry: AccountEntry) -> some View {
+    private var addAccountMenu: some View {
+        Menu {
+            ForEach(Provider.allCases.filter(\.supportsRead)) { provider in
+                Button(provider.title) { addProvider(provider) }
+            }
+            Divider()
+            Menu("Dashboard only — not connected yet") {
+                ForEach(Provider.allCases.filter { !$0.supportsRead }) { provider in
+                    Button(provider.title) { connect(provider, nil) }
+                }
+            }
+        } label: {
+            Image(systemName: "plus").font(.title3.weight(.medium)).frame(width: 28, height: 28)
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .help("Connect another service").accessibilityLabel("Connect another service")
+        .disabled(login.accountID != nil).accessibilityIdentifier("addAccount")
+    }
+
+    private func accountSection(_ entry: AccountEntry) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
                 if entry.account.provider == .claude,
@@ -99,9 +113,14 @@ struct MonitorView: View {
                    let image = NSImage(contentsOf: url) {
                     Image(nsImage: image).resizable().interpolation(.high)
                         .scaledToFit().frame(width: 22, height: 22).accessibilityLabel("Claude")
+                } else if entry.account.provider == .codex,
+                          let url = Bundle.module.url(forResource: "openai-logo", withExtension: "png"),
+                          let image = NSImage(contentsOf: url) {
+                    Image(nsImage: image).renderingMode(.template).resizable().interpolation(.high)
+                        .scaledToFit().frame(width: 22, height: 22).accessibilityLabel("OpenAI")
                 } else {
                     Text(String(entry.account.provider.title.prefix(1))).font(.headline)
-                        .frame(width: 22, height: 22).background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+                        .frame(width: 22, height: 22).foregroundStyle(.secondary)
                         .accessibilityLabel(entry.account.provider.title)
                 }
                 VStack(alignment: .leading, spacing: 3) {
@@ -130,6 +149,7 @@ struct MonitorView: View {
                     Text("Checked \(snapshot.fetchedAt.formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.secondary)
                     Spacer()
                     Button("Refresh") { Task { await monitor.refresh(entry.id) } }
+                        .buttonStyle(.borderless)
                         .disabled(demo || entry.refreshing || login.accountID != nil)
                 }
             } else {
@@ -152,9 +172,7 @@ struct MonitorView: View {
                 }
             }
         }
-        .padding(14)
-        .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder private func metricRow(_ metric: UsageMetric) -> some View {
@@ -211,7 +229,7 @@ struct MonitorView: View {
         }
     }
 
-    private var loginCard: some View {
+    private var loginSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Sign in: \(monitor.entries.first(where: { $0.id == login.accountID })?.account.displayName ?? "Claude")").font(.headline)
             Text(login.provider == .codex
@@ -235,7 +253,7 @@ struct MonitorView: View {
                 HStack { ProgressView().controlSize(.small); Text(login.submitted ? "Completing sign-in…" : "Waiting for \(login.provider.title)'s login link…") }
             }
             Button("Cancel sign-in") { login.cancel(); code = "" }
-        }.padding(14).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+        }.padding(.vertical, 4)
     }
 
     private func startLogin(_ id: UUID) {
@@ -303,7 +321,8 @@ func makeMonitorPanel(_ content: NSView) -> NSView {
     if #available(macOS 26, *) {
         let glass = NSGlassEffectView()
         glass.style = .regular
-        glass.cornerRadius = 16
+        glass.cornerRadius = 20
+        if #available(macOS 27, *) { glass.effectIsInteractive = true }
         glass.contentView = content
         panel = glass
     } else {
