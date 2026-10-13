@@ -110,7 +110,7 @@ struct AdditionalClient: Sendable {
             metrics = [.init(title: "Credit period", kind: .quota, value: remaining,
                              resetsAt: date(period["end"] ?? config["billingPeriodEnd"])),
                        .init(title: "Prepaid credits", kind: .balance,
-                             value: number((config["prepaidBalance"] as? [String: Any])?["val"]).map { $0 / 100 }, unit: "USD")]
+                             value: grokPrepaidUSD(config["prepaidBalance"]), unit: "USD")]
         case .cursor:
             guard let used = number(root["usagePercent"]), (0...100).contains(used) else { throw MonitorError.invalidResponse }
             let paid = (root["includedLimitZero"] as? Bool).map { !$0 } ?? (root["hasNonZeroIncludedLimit"] as? Bool ?? false)
@@ -182,6 +182,22 @@ struct AdditionalClient: Sendable {
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         for (header, value) in headers { request.setValue(value.isEmpty ? nil : value, forHTTPHeaderField: header) }
         return try await http.data(for: request)
+    }
+
+    private func grokPrepaidUSD(_ raw: Any?) -> Double? {
+        guard let fields = raw as? [String: Any] else { return nil }
+        // Grok's proto3 Cent omits a zero scalar; only a present empty object is zero.
+        if fields.isEmpty { return 0 }
+        guard let value = fields["val"] else { return nil }
+        let cents: Int64?
+        if let text = value as? String {
+            cents = Int64(text)
+        } else {
+            guard let data = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed) else { return nil }
+            cents = try? JSONDecoder().decode(Int64.self, from: data)
+        }
+        guard let cents, cents >= 0, let amount = Double(exactly: cents) else { return nil }
+        return amount / 100
     }
 
     private func number(_ raw: Any?) -> Double? {

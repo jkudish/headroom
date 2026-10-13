@@ -68,6 +68,20 @@ import Testing
         await restarted.refresh(a.id)
         #expect(restarted.entries[0].snapshot == nil)
         #expect(restarted.entries[0].error == MonitorError.identityChanged.localizedDescription)
+
+        let missingHuman = try fixtureJWT([
+            "exp": 4102444800, "https://api.openai.com/auth": ["chatgpt_account_id": "shared"],
+            "https://api.openai.com/profile": ["email": "bob@example.test"]
+        ])
+        let auth = store.profile(a.id).appendingPathComponent("auth.json")
+        try JSONSerialization.data(withJSONObject: ["tokens": [
+            "access_token": missingHuman, "id_token": tokenA, "account_id": "shared"
+        ]]).write(to: auth)
+        await restarted.refresh(a.id)
+        #expect(restarted.entries[0].snapshot == nil)
+        #expect(restarted.entries[0].error == MonitorError.signInRequired.localizedDescription)
+        #expect(try store.load()[0].identity?.accountID == "alice")
+
         await restarted.refresh(b.id)
         #expect(restarted.entries[1].snapshot?.metrics.first?.value == 17)
     }

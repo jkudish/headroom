@@ -19,14 +19,25 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
 }
 
 @Test func grokConvertsCentsButDoesNotInventASecondWindow() async throws {
-    let client = AdditionalClient(http: additionalHTTP("""
-    {"subscriptionTier":"SuperGrok","config":{"creditUsagePercent":6,"currentPeriod":{"start":"2026-10-01T00:00:00Z","end":"2026-11-01T00:00:00Z"},"prepaidBalance":{"val":1446}}}
-    """))
-    let result = try await client.fetch(Account(label: "", provider: .grok), secrets: .init(key: "fixture-grok"))
-    #expect(result.metrics.filter { $0.kind == .quota }.count == 1)
-    #expect(result.metrics.first?.value == 94)
-    #expect(result.metrics.first?.title == "Credit period")
-    #expect(result.metrics.first(where: { $0.kind == .balance })?.value == 14.46)
+    let balances: [(String, Double?)] = [
+        (#"{"val":1446}"#, 14.46), (#"{"val":"1446"}"#, 14.46),
+        (#"{"val":0}"#, 0), (#"{"val":"0"}"#, 0), ("{}", 0),
+        ("", nil), ("null", nil), (#"{"val":null}"#, nil), (#"{"val":true}"#, nil),
+        (#"{"other":0}"#, nil), (#"{"val":-1}"#, nil), (#"{"val":1.5}"#, nil),
+        (#"{"val":"1446garbage"}"#, nil), (#"{"val":9007199254740993}"#, nil)
+    ]
+    for (balance, expected) in balances {
+        let wallet = balance.isEmpty ? "" : ",\"prepaidBalance\":\(balance)"
+        let client = AdditionalClient(http: additionalHTTP("""
+        {"subscriptionTier":"SuperGrok","config":{"creditUsagePercent":6,"currentPeriod":{"start":"2026-10-01T00:00:00Z","end":"2026-11-01T00:00:00Z"}\(wallet)}}
+        """))
+        let result = try await client.fetch(Account(label: "", provider: .grok), secrets: .init(key: "fixture-grok"))
+        #expect(result.metrics.filter { $0.kind == .quota }.count == 1)
+        #expect(result.metrics.first?.value == 94)
+        #expect(result.metrics.first?.title == "Credit period")
+        #expect(result.metrics.first(where: { $0.kind == .balance })?.value == expected)
+        #expect(result.metrics.first(where: { $0.kind == .balance })?.unit == "USD")
+    }
 }
 
 @Test func cursorExhaustedEntitlementStillShowsZeroAndTrialHasNoRecurringReset() async throws {

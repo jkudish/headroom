@@ -140,16 +140,17 @@ private struct CodexCredential {
               let access = try? CodexClaims.decode(file.tokens.access_token),
               let expiration = access.exp, expiration.isFinite,
               expiration > Date().timeIntervalSince1970 + 30,
-              let workspace = access.workspace, safeHeader(workspace) else {
+              let workspace = access.workspace, safeHeader(workspace),
+              let user = access.user, safeHeader(user) else {
             throw MonitorError.signInRequired
         }
         if let selected = file.tokens.account_id, selected != workspace { throw MonitorError.identityChanged }
         let identity = file.tokens.id_token.flatMap { try? CodexClaims.decode($0) }
         if let other = identity?.workspace, other != workspace { throw MonitorError.identityChanged }
-        if let user = access.user, let other = identity?.user, user != other { throw MonitorError.identityChanged }
-        guard let user = identity?.user ?? access.user, safeHeader(user) else { throw MonitorError.signInRequired }
+        if let other = identity?.user, user != other { throw MonitorError.identityChanged }
+        let sameOwner = identity?.user == user && identity?.workspace == workspace
         return Self(token: file.tokens.access_token, workspace: workspace, user: user,
-                    email: identity?.email ?? identity?.profile?.email ?? access.email ?? access.profile?.email)
+                    email: access.email ?? access.profile?.email ?? (sameOwner ? identity?.email ?? identity?.profile?.email : nil))
     }
 
     private static func safeHeader(_ value: String) -> Bool {
