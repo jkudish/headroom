@@ -1,0 +1,232 @@
+import Foundation
+import SwiftUI
+import Testing
+@testable import UsageMonitor
+
+private func temporaryStore() throws -> AccountStore {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    return try AccountStore(root: root)
+}
+
+private func response(_ value: String) -> Data { Data(value.utf8) }
+
+@Test func metersUseRemainingPercentAndCentsWithoutInventingMissingLimits() throws {
+    let usage = try JSONDecoder().decode(ClaudeUsage.self, from: response("""
+    {"five_hour":{"utilization":23.5,"resets_at":"2026-10-13T16:30:00.123Z"},
+     "seven_day":{"utilization":94,"resets_at":"2026-10-18T09:00:00+00:00"},
+     "extra_usage":{"is_enabled":true,"used_credits":1234,"monthly_limit":5000}}
+    """))
+    #expect(usage.fiveHour?.remaining == 76.5)
+    #expect(usage.sevenDay?.remaining == 6)
+    #expect(usage.fiveHour?.resetDate == Date(timeIntervalSince1970: 1791909000.123))
+    #expect(usage.extraUsage?.spent == 12.34)
+    #expect(usage.extraUsage?.cap == 50)
+    let absent = try JSONDecoder().decode(ClaudeUsage.self, from: response("""
+    {"five_hour":null,"extra_usage":{"is_enabled":true,"used_credits":750,"monthly_limit":null}}
+    """))
+    #expect(absent.fiveHour == nil)
+    #expect(absent.sevenDay == nil)
+    #expect(absent.extraUsage?.spent == 7.5)
+    #expect(absent.extraUsage?.cap == nil)
+}
+
+@Test func malformedMetersAreNotPresentedAsHealthy() throws {
+    let usage = try JSONDecoder().decode(ClaudeUsage.self, from: response("""
+    {"five_hour":{"utilization":-3},"seven_day":{"utilization":101}}
+    """))
+    #expect(usage.fiveHour?.remaining == nil)
+    #expect(usage.sevenDay?.remaining == nil)
+}
+
+@Test func freshProfilesNeverUseAnAmbientCredentialAndMetadataSurvivesRestart() throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let a = Account(label: "Personal")
+    let b = Account(label: "Work")
+    try store.prepare(a.id)
+    try store.prepare(b.id)
+    try store.save([a, b])
+    // A real absent profile must fail closed even on a signed-in development machine.
+    #expect(throws: MonitorError.signInRequired) { try store.credentials(b.id) }
+    let credentialFile = store.profile(a.id).appendingPathComponent(".credentials.json")
+    try response("""
+    {"claudeAiOauth":{"accessToken":"fixture-account-a","expiresAt":4102444800000,"scopes":["user:profile"]}}
+    """).write(to: credentialFile)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: credentialFile.path)
+    #expect(try store.credentials(a.id).accessToken == "fixture-account-a")
+    #expect(throws: MonitorError.signInRequired) { try store.credentials(b.id) }
+    let restarted = try AccountStore(root: store.root)
+    #expect(try restarted.load() == [a, b])
+    #expect(store.profile(a.id) != store.profile(b.id))
+}
+
+@Test func helperFindsTheRealKeychainButKeepsAccountConfigsSeparate() throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let a = UUID(), b = UUID()
+    let first = try store.helperEnvironment(a)
+    let second = try store.helperEnvironment(b)
+    #expect(first["HOME"] == FileManager.default.homeDirectoryForCurrentUser.path)
+    #expect(first["CLAUDE_CONFIG_DIR"] == store.profile(a).path)
+    #expect(first["CLAUDE_SECURESTORAGE_CONFIG_DIR"] == store.profile(a).path)
+    #expect(first["CLAUDE_CONFIG_DIR"] != second["CLAUDE_CONFIG_DIR"])
+    #expect(first["ANTHROPIC_CONFIG_DIR"] != second["ANTHROPIC_CONFIG_DIR"])
+    #expect(first["ANTHROPIC_API_KEY"] == nil)
+}
+
+@Test @MainActor func newAccountsUseVerifiedNamesAndKeepCustomLabelsAfterRestart() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let service = FixtureService()
+    let monitor = try Monitor(store: store, fetch: { id in try await service.fetch(id) })
+    let id = try monitor.add(label: "")
+    try await service.set(id, identity: "alice", utilization: 19)
+    await monitor.refresh(id)
+    #expect(monitor.entries[0].account.label == "")
+    #expect(monitor.entries[0].account.displayName == "alice@example.test")
+    try monitor.rename(id, label: "  Personal  ")
+    await monitor.refresh(id)
+    #expect(monitor.entries[0].account.displayName == "Personal")
+    let restarted = try Monitor(store: store, fetch: { id in try await service.fetch(id) })
+    #expect(restarted.entries[0].account.displayName == "Personal")
+    try restarted.rename(id, label: "")
+    #expect(restarted.entries[0].account.displayName == "alice@example.test")
+}
+
+@Test func limitColorsAndResetTextMatchTheDisplayedBoundaries() throws {
+    func window(_ used: Double) -> ClaudeUsage.Window { .init(utilization: used, resetsAt: "2026-10-16T04:00:00Z") }
+    #expect(window(100).remainingColor == .red)
+    #expect(window(99.9).remainingColor == .orange)
+    #expect(window(90).remainingColor == .orange)
+    #expect(window(89.9).remainingColor == .accentColor)
+    #expect(window(101).remainingColor == .secondary)
+    let zone = try #require(TimeZone(identifier: "America/Vancouver"))
+    #expect(window(100).formattedReset(timeZone: zone) == "Thu Oct 15 at 9pm")
+    let halfHour = ClaudeUsage.Window(utilization: 25, resetsAt: "2026-10-16T04:30:00Z")
+    #expect(halfHour.formattedReset(timeZone: zone) == "Thu Oct 15 at 9:30pm")
+}
+
+@Test @MainActor func twoAccountsRefreshIndependentlyAndRejectIdentityChanges() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let a = Account(label: "Personal")
+    let b = Account(label: "Work")
+    try store.save([a, b])
+    let service = FixtureService()
+    let monitor = try Monitor(store: store, fetch: { id in try await service.fetch(id) })
+    try await service.set(a.id, identity: "alice", utilization: 13)
+    try await service.set(b.id, identity: "bob", utilization: 87)
+    await monitor.refresh(a.id)
+    await monitor.refresh(b.id)
+    #expect(monitor.entries[0].snapshot?.usage.fiveHour?.remaining == 87)
+    #expect(monitor.entries[1].snapshot?.usage.fiveHour?.remaining == 13)
+    #expect(try store.load()[0].identity?.accountID == "alice")
+    try await service.set(a.id, identity: "bob", utilization: 2)
+    await monitor.refresh(a.id)
+    #expect(monitor.entries[0].snapshot == nil)
+    #expect(monitor.entries[0].error == MonitorError.identityChanged.localizedDescription)
+    #expect(monitor.entries[1].snapshot?.usage.fiveHour?.remaining == 13)
+    // Binding is durable, not just an in-memory check.
+    let restarted = try Monitor(store: store, fetch: { id in try await service.fetch(id) })
+    await restarted.refresh(a.id)
+    #expect(restarted.entries[0].snapshot == nil)
+}
+
+@Test @MainActor func removedAccountCannotReturnThroughADelayedRefresh() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let a = Account(label: "Remove me")
+    try store.prepare(a.id)
+    try store.save([a])
+    let service = FixtureService()
+    try await service.set(a.id, identity: "alice", utilization: 13)
+    await service.pause()
+    let monitor = try Monitor(store: store, fetch: { id in try await service.fetch(id) })
+    let refresh = Task { await monitor.refresh(a.id) }
+    await service.waitUntilStarted()
+    try monitor.remove(a.id)
+    await service.resume()
+    await refresh.value
+    #expect(monitor.entries.isEmpty)
+    #expect(try store.load().isEmpty)
+}
+
+@Test func clientKeepsSelectedAccountCredentialsAndProfileTogether() async throws {
+    let a = UUID(), b = UUID()
+    let client = ClaudeClient(credentials: { id in
+        Credential(accessToken: id == a ? "fixture-alice" : "fixture-bob", expiresAt: nil, scopes: ["user:profile"])
+    }, send: { request in
+        let alice = request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-alice"
+        let profile = alice
+            ? "{\"account\":{\"uuid\":\"alice\",\"email_address\":\"alice@example.test\",\"display_name\":\"  Alice  \"},\"organization\":{\"uuid\":\"personal\"}}"
+            : "{\"account\":{\"uuid\":\"bob\",\"emailAddress\":\"bob@example.test\"},\"organization\":{\"uuid\":\"work\"}}"
+        let payload = request.url?.lastPathComponent == "profile" ? profile : "{\"five_hour\":{\"utilization\":\(alice ? 19 : 83)}}"
+        return (response(payload), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    })
+    async let first = client.fetch(a)
+    async let second = client.fetch(b)
+    let (alice, bob) = try await (first, second)
+    #expect(alice.identity.accountID == "alice")
+    #expect(alice.identity.email == "alice@example.test")
+    #expect(Account(label: "", identity: alice.identity).displayName == "Alice")
+    #expect(alice.usage.fiveHour?.remaining == 81)
+    #expect(bob.identity.accountID == "bob")
+    #expect(bob.identity.email == "bob@example.test")
+    #expect(Account(label: "", identity: bob.identity).displayName == "bob@example.test")
+    #expect(bob.usage.fiveHour?.remaining == 17)
+}
+
+@Test func expiredAndInferenceOnlyTokensCannotReadUsage() {
+    #expect(throws: MonitorError.signInRequired) {
+        try Credential.decode(response("{\"claudeAiOauth\":{\"accessToken\":\"fixture\",\"expiresAt\":1,\"scopes\":[\"user:profile\"]}}"))
+    }
+    #expect(throws: MonitorError.missingScope) {
+        try Credential.decode(response("{\"claudeAiOauth\":{\"accessToken\":\"fixture\",\"scopes\":[\"user:inference\"]}}"))
+    }
+}
+
+@Test @MainActor func startingLoginInvalidatesAnEarlierRefresh() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let a = Account(label: "Reconnecting")
+    try store.save([a])
+    let service = FixtureService()
+    try await service.set(a.id, identity: "old-account", utilization: 13)
+    await service.pause()
+    let monitor = try Monitor(store: store, fetch: { id in try await service.fetch(id) })
+    let refresh = Task { await monitor.refresh(a.id) }
+    await service.waitUntilStarted()
+    monitor.beginLogin(a.id)
+    await service.resume()
+    await refresh.value
+    #expect(monitor.entries[0].snapshot == nil)
+    #expect(monitor.entries[0].account.identity == nil)
+    #expect(!monitor.entries[0].refreshing)
+}
+
+private actor FixtureService {
+    var values: [UUID: UsageSnapshot] = [:]
+    var paused = false
+    var started = false
+    var pending: CheckedContinuation<Void, Never>?
+    var startWaiter: CheckedContinuation<Void, Never>?
+
+    func set(_ id: UUID, identity: String, utilization: Double) throws {
+        let usage = try JSONDecoder().decode(ClaudeUsage.self, from: response("""
+        {"five_hour":{"utilization":\(utilization)}}
+        """))
+        values[id] = UsageSnapshot(identity: AccountIdentity(accountID: identity, organizationID: "org-\(identity)", email: "\(identity)@example.test"), usage: usage, fetchedAt: Date())
+    }
+    func pause() { paused = true }
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startWaiter = $0 }
+    }
+    func resume() { paused = false; pending?.resume(); pending = nil }
+    func fetch(_ id: UUID) async throws -> UsageSnapshot {
+        started = true
+        startWaiter?.resume(); startWaiter = nil
+        if paused { await withCheckedContinuation { pending = $0 } }
+        return try #require(values[id])
+    }
+}

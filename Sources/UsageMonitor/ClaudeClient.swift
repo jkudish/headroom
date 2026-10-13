@@ -1,0 +1,85 @@
+import Foundation
+
+struct ClaudeClient: Sendable {
+    let credentials: @Sendable (UUID) throws -> Credential
+    let send: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+
+    init(store: AccountStore) {
+        credentials = { try store.credentials($0) }
+        let config = URLSessionConfiguration.ephemeral
+        config.httpShouldSetCookies = false
+        config.urlCache = nil
+        config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForResource = 30
+        let session = URLSession(configuration: config, delegate: RejectRedirects(), delegateQueue: nil)
+        send = { request in
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw MonitorError.invalidResponse }
+            return (data, http)
+        }
+    }
+
+    init(credentials: @escaping @Sendable (UUID) throws -> Credential,
+         send: @escaping @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)) {
+        self.credentials = credentials
+        self.send = send
+    }
+
+    func fetch(_ id: UUID) async throws -> UsageSnapshot {
+        let token = try credentials(id).accessToken
+        let profile = try await request("profile", token: token)
+        struct Profile: Decodable {
+            struct User: Decodable {
+                let uuid: String
+                let email: String?
+                let name: String?
+                enum CodingKeys: String, CodingKey {
+                    case uuid, email, emailAddress, emailAddressSnake = "email_address"
+                    case displayName = "display_name"
+                }
+                init(from decoder: Decoder) throws {
+                    let values = try decoder.container(keyedBy: CodingKeys.self)
+                    uuid = try values.decode(String.self, forKey: .uuid)
+                    email = try values.decodeIfPresent(String.self, forKey: .emailAddressSnake)
+                        ?? values.decodeIfPresent(String.self, forKey: .emailAddress)
+                        ?? values.decodeIfPresent(String.self, forKey: .email)
+                    let displayName = try values.decodeIfPresent(String.self, forKey: .displayName)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    name = displayName?.isEmpty == false ? displayName : nil
+                }
+            }
+            struct Organization: Decodable { let uuid: String }
+            let account: User
+            let organization: Organization
+        }
+        guard let decoded = try? JSONDecoder().decode(Profile.self, from: profile),
+              !decoded.account.uuid.isEmpty, !decoded.organization.uuid.isEmpty else { throw MonitorError.invalidResponse }
+        let usageData = try await request("usage", token: token)
+        guard let usage = try? JSONDecoder().decode(ClaudeUsage.self, from: usageData) else { throw MonitorError.invalidResponse }
+        return UsageSnapshot(
+            identity: AccountIdentity(accountID: decoded.account.uuid, organizationID: decoded.organization.uuid,
+                                      email: decoded.account.email ?? "Email unavailable", name: decoded.account.name),
+            usage: usage, fetchedAt: Date()
+        )
+    }
+
+    private func request(_ endpoint: String, token: String) async throws -> Data {
+        var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/\(endpoint)")!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        do {
+            let (data, response) = try await send(request)
+            guard response.statusCode == 200 else { throw MonitorError.http(response.statusCode) }
+            return data
+        } catch let error as MonitorError { throw error }
+        catch { throw MonitorError.network }
+    }
+}
+
+private final class RejectRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
