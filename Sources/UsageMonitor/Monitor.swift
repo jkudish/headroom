@@ -28,12 +28,21 @@ final class Monitor {
     let store: AccountStore
     private let fetch: @Sendable (UUID) async throws -> UsageSnapshot
     private let consume: @Sendable (Account, String, UUID) async throws -> ResetOutcome
+    private let now: () -> Date
     private var requests: [UUID: UUID] = [:]
+    private var refreshSchedule: [UUID: (after: Date, failures: Int)] = [:]
+
+    var nextAutomaticRefresh: Date? {
+        entries.filter { !$0.refreshing && !$0.resetting && $0.account.provider.supportsRead }
+            .compactMap { refreshSchedule[$0.id]?.after }.min()
+    }
 
     init(store: AccountStore, fetch: @escaping @Sendable (UUID) async throws -> UsageSnapshot,
-         consume: (@Sendable (Account, String, UUID) async throws -> ResetOutcome)? = nil) throws {
+         consume: (@Sendable (Account, String, UUID) async throws -> ResetOutcome)? = nil,
+         now: @escaping () -> Date = Date.init) throws {
         self.store = store
         self.fetch = fetch
+        self.now = now
         self.consume = consume ?? { account, credit, request in
             try await CodexClient(store: store).consumeReset(account, creditID: credit, requestID: request)
         }
@@ -123,15 +132,27 @@ final class Monitor {
         try store.deleteProfile(id)
         try store.save(entries.filter { $0.id != id }.map(\.account))
         requests[id] = nil
+        refreshSchedule[id] = nil
         entries.removeAll { $0.id == id }
     }
 
     func beginLogin(_ id: UUID) {
         guard let index = entries.firstIndex(where: { $0.id == id }), !entries[index].resetting else { return }
         requests[id] = nil
+        refreshSchedule[id] = nil
         entries[index].snapshot = nil
         entries[index].error = nil
         entries[index].refreshing = false
+    }
+
+    func refreshDue(maxAge: TimeInterval = 60, isPaused: () -> Bool = { false }) async {
+        for id in entries.map(\.id) {
+            guard !Task.isCancelled, !isPaused() else { return }
+            guard let entry = entries.first(where: { $0.id == id }), entry.account.provider.supportsRead,
+                  !entry.refreshing, !entry.resetting, let schedule = refreshSchedule[id] else { continue }
+            let due = schedule.failures == 0 ? schedule.after.addingTimeInterval(maxAge - 60) : schedule.after
+            if now() >= due { await refresh(id) }
+        }
     }
 
     func refresh(_ id: UUID) async {
@@ -160,11 +181,21 @@ final class Monitor {
             try store.save(accounts)
             entries[current].account = accounts[current]
             entries[current].snapshot = snapshot
+            refreshSchedule[id] = (now().addingTimeInterval(60), 0)
         } catch {
             guard requests[id] == requestID, let current = entries.firstIndex(where: { $0.id == id }) else { return }
             entries[current].snapshot = nil
             // Never surface network bodies, credentials, or helper output in errors.
             entries[current].error = (error as? MonitorError)?.localizedDescription ?? "Could not save this account's state."
+            switch error as? MonitorError {
+            case .signInRequired, .missingScope, .keychainUnavailable, .invalidProfile, .identityChanged,
+                 .duplicateAccount, .http(401), .http(403), .unsupported:
+                // Only a user retry/reconnect may resume credentials that require intervention.
+                refreshSchedule[id] = nil
+            default:
+                let failures = min((refreshSchedule[id]?.failures ?? 0) + 1, 5)
+                refreshSchedule[id] = (now().addingTimeInterval(min(1800, 60 * pow(2, Double(failures)))), failures)
+            }
         }
         if requests[id] == requestID, let current = entries.firstIndex(where: { $0.id == id }) {
             entries[current].refreshing = false

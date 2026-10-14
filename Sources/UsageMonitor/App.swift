@@ -18,6 +18,8 @@ enum UsageMonitorApp {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private var status: NSStatusItem?
     private var availabilityTimer: Timer?
+    private var refreshTimer: Timer?
+    private var refreshTask: Task<Void, Never>?
     private var appearanceObservation: NSKeyValueObservation?
     private var window: NSWindow?
     private var connectionWindow: NSWindow?
@@ -135,9 +137,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func observeAccounts() {
         withObservationTracking {
             updateStatusItem()
-            _ = login.accountID
+            scheduleAutomaticRefresh()
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeAccounts() }
+        }
+    }
+
+    private func scheduleAutomaticRefresh() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+        guard !demo, login.accountID == nil, refreshTask == nil,
+              let due = monitor?.nextAutomaticRefresh else { return }
+        let timer = Timer(fire: due, interval: 0, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.refreshDue() }
+        }
+        timer.tolerance = 1
+        refreshTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func refreshDue(maxAge: TimeInterval = 60) {
+        guard !demo, login.accountID == nil, refreshTask == nil, let monitor else { return }
+        refreshTimer?.invalidate()
+        refreshTask = Task { [weak self] in
+            await monitor.refreshDue(maxAge: maxAge, isPaused: { [weak self] in self?.login.accountID != nil })
+            self?.refreshTask = nil
+            self?.scheduleAutomaticRefresh()
         }
     }
 
@@ -184,34 +209,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard let monitor else { return }
+        refreshDue(maxAge: 30)
         menu.removeAllItems()
         menu.appearance = NSApplication.shared.effectiveAppearance
         if demo { menu.addItem(NSMenuItem(title: "Demo — fixture data, not live usage", action: nil, keyEquivalent: "")) }
         if monitor.entries.isEmpty {
             menu.addItem(NSMenuItem(title: "No accounts connected", action: nil, keyEquivalent: ""))
         }
-        for entry in monitor.entries {
-            let content = NSHostingView(rootView: AccountSummaryView(entry: entry)
+        for provider in Provider.allCases {
+            let entries = monitor.entries.filter { $0.account.provider == provider }
+            guard !entries.isEmpty else { continue }
+            let content = NSHostingView(rootView: ProviderAccountGrid(entries: entries) { [weak self] entry in
+                VStack(alignment: .leading, spacing: 8) {
+                    AccountSummaryView(entry: entry, compact: true)
+                    if provider == .codex {
+                        Button("Use reset…") { [weak self] in self?.openResetDetails(entry.account) }
+                            .disabled(self?.login.accountID != nil || entry.resetting)
+                            .accessibilityIdentifier("menuResets-\(entry.id)")
+                    }
+                }.buttonStyle(.borderless).font(.system(size: 12))
+            }
                 .padding(.horizontal, 16).padding(.vertical, 10).frame(width: 360).fixedSize(horizontal: false, vertical: true))
             content.frame.size = NSSize(width: 360, height: max(1, ceil(content.fittingSize.height)))
             let row = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             row.view = content
             row.isEnabled = false
             menu.addItem(row)
-            if entry.account.provider == .codex {
-                addItem("View / use resets…", to: menu, action: #selector(showResetDetails),
-                        represented: entry.id.uuidString, enabled: login.accountID == nil && !entry.resetting)
-            }
             let actions = NSMenuItem(title: "Account actions", action: nil, keyEquivalent: "")
-            let submenu = NSMenu()
-            submenu.autoenablesItems = false
-            let idle = !demo && login.accountID == nil && !entry.refreshing && !entry.resetting
-            addItem("Refresh account", to: submenu, action: #selector(refreshAccount), represented: entry.id.uuidString, enabled: idle)
-            addItem(entry.account.provider.usesHelper ? "Sign in / reconnect…" : "Update credentials…", to: submenu,
-                    action: #selector(reconnectAccount), represented: entry.id.uuidString, enabled: idle)
-            addItem("Provider dashboard", to: submenu, action: #selector(openDashboard), represented: entry.id.uuidString)
-            addItem("Account settings…", to: submenu, action: #selector(showAccountWindow))
-            actions.submenu = submenu
+            let accounts = NSMenu()
+            accounts.autoenablesItems = false
+            for entry in entries {
+                let account = NSMenuItem(title: entry.displayName, action: nil, keyEquivalent: "")
+                let submenu = NSMenu()
+                submenu.autoenablesItems = false
+                let idle = !demo && login.accountID == nil && !entry.refreshing && !entry.resetting
+                addItem("Refresh account", to: submenu, action: #selector(refreshAccount), represented: entry.id.uuidString, enabled: idle)
+                addItem(entry.account.provider.usesHelper ? "Sign in / reconnect…" : "Update credentials…", to: submenu,
+                        action: #selector(reconnectAccount), represented: entry.id.uuidString, enabled: idle)
+                if provider == .codex {
+                    addItem("View / use resets…", to: submenu, action: #selector(showResetDetails),
+                            represented: entry.id.uuidString, enabled: login.accountID == nil && !entry.resetting)
+                }
+                addItem("Provider dashboard", to: submenu, action: #selector(openDashboard), represented: entry.id.uuidString)
+                addItem("Account settings…", to: submenu, action: #selector(showAccountWindow))
+                account.submenu = submenu
+                accounts.addItem(account)
+            }
+            actions.submenu = accounts
             menu.addItem(actions)
             menu.addItem(.separator())
         }
@@ -323,6 +367,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func applicationWillTerminate(_ notification: Notification) {
         availabilityTimer?.invalidate()
+        refreshTimer?.invalidate()
+        refreshTask?.cancel()
         login.cancel()
         if let demoRoot { try? FileManager.default.removeItem(at: demoRoot) }
     }

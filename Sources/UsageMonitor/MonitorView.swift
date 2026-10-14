@@ -47,9 +47,11 @@ struct MonitorView: View {
                         loginSection
                         Divider()
                     }
-                    ForEach(monitor.entries) { entry in
-                        accountSection(entry)
-                        if entry.id != monitor.entries.last?.id { Divider() }
+                    ForEach(Provider.allCases.filter { provider in monitor.entries.contains { $0.account.provider == provider } }) { provider in
+                        ProviderAccountGrid(entries: monitor.entries.filter { $0.account.provider == provider }) { entry in
+                            accountSection(entry)
+                        }
+                        Divider()
                     }
                     if let message = error ?? login.error {
                         UsageWarning(message: message)
@@ -62,6 +64,7 @@ struct MonitorView: View {
                     Task { for entry in monitor.entries { await monitor.refresh(entry.id) } }
                 }.disabled(demo || login.accountID != nil || monitor.entries.isEmpty || monitor.entries.contains(where: \.refreshing))
                 Spacer()
+                Text("Auto: 1 minute").font(.caption).foregroundStyle(.secondary)
                 Button("Quit") { login.cancel(); NSApplication.shared.terminate(nil) }
             }.buttonStyle(.borderless).padding(12)
         }
@@ -91,14 +94,10 @@ struct MonitorView: View {
 
     private func accountSection(_ entry: AccountEntry) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            AccountSummaryView(entry: entry)
+            AccountSummaryView(entry: entry, compact: true)
             HStack {
                 Button("Refresh") { Task { await monitor.refresh(entry.id) } }
                     .buttonStyle(.borderless).disabled(demo || entry.refreshing || entry.resetting || login.accountID != nil)
-                if entry.account.provider == .codex {
-                    Button("View / use resets…") { showResets(entry.account) }
-                        .buttonStyle(.borderless).disabled(login.accountID != nil || entry.resetting)
-                }
                 Spacer()
                 Menu {
                     Button("Reconnect account…") { reconnect(entry.account) }
@@ -108,11 +107,16 @@ struct MonitorView: View {
                 .menuStyle(.borderlessButton).fixedSize().disabled(demo || login.accountID != nil || entry.resetting)
                 .accessibilityLabel("Actions for \(entry.displayName)")
             }
+            if entry.account.provider == .codex {
+                Button("Use reset…") { showResets(entry.account) }
+                    .buttonStyle(.borderless).disabled(login.accountID != nil || entry.resetting)
+                    .accessibilityIdentifier("windowResets-\(entry.id)")
+            }
             Toggle("Show in menu bar", isOn: Binding(get: { entry.account.showInMenuBar }, set: { visible in
                 perform { try monitor.setMenuBarVisibility(entry.id, visible: visible) }
             })).toggleStyle(.switch).controlSize(.small).disabled(demo)
             if entry.snapshot == nil {
-                HStack {
+                VStack(alignment: .leading, spacing: 6) {
                     Button(entry.account.provider.usesHelper ? "Sign in" : "Enter credentials") { reconnect(entry.account) }
                     if entry.error == MonitorError.keychainUnavailable.localizedDescription {
                         Button("Allow Keychain access") { grantAccess(entry.id) }
@@ -124,7 +128,7 @@ struct MonitorView: View {
                 }
             }
         }
-        .padding(.vertical, 4)
+        .font(.system(size: 12)).padding(.vertical, 4)
     }
 
     private var loginSection: some View {

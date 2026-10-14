@@ -180,15 +180,23 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
                                 grantedAt: nil, expiresAt: nil, title: nil, description: nil)
     let snapshot = UsageSnapshot(identity: owner, metrics: [], resetCredits: .init(availableCount: 1, expirations: [], credits: [credit]))
     let gate = FixtureService()
+    let polling = PollFixture()
+    var now = Date(timeIntervalSince1970: 2_000_000_000)
     try await gate.set(selected.id, identity: "alice", utilization: 13)
     await gate.pause()
-    let monitor = try Monitor(store: store, fetch: { _ in snapshot }, consume: { account, _, _ in
+    let monitor = try Monitor(store: store, fetch: { id in
+        _ = try await polling.fetch(id)
+        return snapshot
+    }, consume: { account, _, _ in
         _ = try await gate.fetch(account.id)
         return try JSONDecoder().decode(ResetOutcome.self, from: response(#"{"code":"reset","windows_reset":2}"#))
-    })
+    }, now: { now })
     await monitor.refresh(selected.id)
     let reset = Task { try await monitor.useReset(selected.id, creditID: credit.id) }
     await gate.waitUntilStarted()
+    now += 60
+    await monitor.refreshDue(maxAge: 30)
+    #expect(await polling.count(selected.id) == 1)
     await #expect(throws: MonitorError.invalidResponse) { try await monitor.useReset(selected.id, creditID: credit.id) }
     #expect(throws: MonitorError.loginBusy) { try monitor.remove(selected.id) }
     #expect(throws: MonitorError.loginBusy) { try monitor.reconnect(selected.id, secrets: .init(key: "not-saved")) }
@@ -198,6 +206,7 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(monitor.entries.map(\.id) == [selected.id])
     #expect(!monitor.entries[0].resetting)
     #expect(monitor.entries[0].snapshot?.identity == owner)
+    #expect(await polling.count(selected.id) == 2)
 }
 
 @Test @MainActor func uncertainResetBlocksAnotherCreditUntilSuccessfulRefresh() async throws {
@@ -574,7 +583,7 @@ private actor FixtureService {
         """))
         values[id] = UsageSnapshot(identity: AccountIdentity(accountID: identity, organizationID: "org-\(identity)", email: "\(identity)@example.test"), usage: usage, fetchedAt: Date())
     }
-    func pause() { paused = true }
+    func pause() { paused = true; started = false }
     func waitUntilStarted() async {
         if started { return }
         await withCheckedContinuation { startWaiter = $0 }
@@ -585,5 +594,144 @@ private actor FixtureService {
         startWaiter?.resume(); startWaiter = nil
         if paused { await withCheckedContinuation { pending = $0 } }
         return try #require(values[id])
+    }
+}
+
+@Test @MainActor func automaticUsageRefreshRespectsMinuteAndStaleMenuBoundaries() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let account = Account(label: "", provider: .codex)
+    try store.save([account])
+    let service = PollFixture()
+    var now = Date(timeIntervalSince1970: 2_000_000_000)
+    let monitor = try Monitor(store: store, fetch: { try await service.fetch($0) }, now: { now })
+    await monitor.refresh(account.id)
+    now += 59
+    await monitor.refreshDue()
+    #expect(await service.count(account.id) == 1)
+    now += 1
+    await monitor.refreshDue()
+    #expect(await service.count(account.id) == 2)
+    now += 29
+    await monitor.refreshDue(maxAge: 30)
+    #expect(await service.count(account.id) == 2)
+    now += 1
+    await monitor.refreshDue(maxAge: 30)
+    await monitor.refreshDue(maxAge: 30)
+    #expect(await service.count(account.id) == 3)
+    #expect(monitor.entries[0].snapshot?.metrics.first?.value == 3)
+}
+
+@Test @MainActor func automaticBackoffAndAuthPauseStayAccountScoped() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let limited = Account(label: "", provider: .codex), blocked = Account(label: "", provider: .claude)
+    try store.save([limited, blocked])
+    let service = PollFixture()
+    await service.fail(limited.id, with: .http(429))
+    await service.fail(blocked.id, with: .keychainUnavailable)
+    var now = Date(timeIntervalSince1970: 2_000_000_000)
+    let monitor = try Monitor(store: store, fetch: { try await service.fetch($0) }, now: { now })
+    await monitor.refresh(limited.id)
+    await monitor.refresh(blocked.id)
+    now += 119
+    await monitor.refreshDue(maxAge: 30)
+    #expect(await service.count(limited.id) == 1)
+    now += 1
+    await monitor.refreshDue()
+    #expect(await service.count(limited.id) == 2)
+    now += 239
+    await monitor.refreshDue(maxAge: 30)
+    #expect(await service.count(limited.id) == 2)
+    now += 1
+    await service.fail(limited.id, with: nil)
+    await monitor.refreshDue()
+    #expect(await service.count(limited.id) == 3)
+    now += 60
+    await monitor.refreshDue()
+    #expect(await service.count(limited.id) == 4)
+    #expect(await service.count(blocked.id) == 1)
+    await service.fail(blocked.id, with: nil)
+    await monitor.refresh(blocked.id) // Only an explicit user retry resumes this account.
+    now += 60
+    await monitor.refreshDue()
+    #expect(await service.count(blocked.id) == 3)
+
+    await service.fail(limited.id, with: .network)
+    await monitor.refresh(limited.id)
+    for delay: TimeInterval in [120, 240, 480, 960, 1800, 1800] {
+        let before = await service.count(limited.id)
+        now += delay - 1
+        await monitor.refreshDue(maxAge: 30)
+        #expect(await service.count(limited.id) == before)
+        now += 1
+        await monitor.refreshDue()
+        #expect(await service.count(limited.id) == before + 1)
+    }
+    for failure in [MonitorError.signInRequired, .missingScope, .http(401), .http(403)] {
+        await service.fail(blocked.id, with: failure)
+        await monitor.refresh(blocked.id)
+        let before = await service.count(blocked.id)
+        now += 3600
+        await monitor.refreshDue(maxAge: 30)
+        #expect(await service.count(blocked.id) == before)
+    }
+}
+
+@Test @MainActor func automaticRefreshCannotFetchAnAccountDuringReconnect() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let account = Account(label: "", provider: .claude)
+    try store.save([account])
+    let service = PollFixture()
+    var now = Date(timeIntervalSince1970: 2_000_000_000)
+    let monitor = try Monitor(store: store, fetch: { try await service.fetch($0) }, now: { now })
+    await monitor.refresh(account.id)
+    monitor.beginLogin(account.id)
+    now += 3600
+    await monitor.refreshDue(maxAge: 30)
+    #expect(await service.count(account.id) == 1)
+    #expect(monitor.entries[0].snapshot == nil)
+}
+
+@Test @MainActor func loginStartingDuringAutomaticBatchPausesRemainingAccounts() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let first = Account(label: ""), second = Account(label: "")
+    try store.save([first, second])
+    let service = FixtureService()
+    try await service.set(first.id, identity: "first", utilization: 23)
+    try await service.set(second.id, identity: "second", utilization: 13)
+    var now = Date(timeIntervalSince1970: 2_000_000_000)
+    var signingIn = false
+    let monitor = try Monitor(store: store, fetch: { try await service.fetch($0) }, now: { now })
+    await monitor.refresh(first.id)
+    await monitor.refresh(second.id)
+    try await service.set(second.id, identity: "second", utilization: 91)
+    await service.pause()
+    now += 60
+    let batch = Task { await monitor.refreshDue(isPaused: { signingIn }) }
+    await service.waitUntilStarted()
+    monitor.beginLogin(first.id)
+    signingIn = true
+    await service.resume()
+    await batch.value
+    #expect(monitor.entries[0].snapshot == nil)
+    #expect(monitor.entries[1].snapshot?.metrics.first?.value == 87)
+    signingIn = false
+    await monitor.refreshDue(isPaused: { signingIn })
+    #expect(monitor.entries[0].snapshot == nil)
+    #expect(monitor.entries[1].snapshot?.metrics.first?.value == 9)
+}
+
+private actor PollFixture {
+    var counts: [UUID: Int] = [:]
+    var errors: [UUID: MonitorError] = [:]
+    func fail(_ id: UUID, with error: MonitorError?) { errors[id] = error }
+    func count(_ id: UUID) -> Int { counts[id, default: 0] }
+    func fetch(_ id: UUID) throws -> UsageSnapshot {
+        counts[id, default: 0] += 1
+        if let error = errors[id] { throw error }
+        return UsageSnapshot(metrics: [.init(title: "Weekly", kind: .quota, value: Double(counts[id]!))])
     }
 }

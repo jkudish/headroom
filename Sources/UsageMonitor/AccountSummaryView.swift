@@ -4,6 +4,9 @@ import SwiftUI
 // Transparent content shared by the native menu and the account management window.
 struct AccountSummaryView: View {
     let entry: AccountEntry
+    var compact = false
+
+    private var textFont: Font { compact ? .system(size: 12) : .callout }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: entry.snapshot?.availabilityChangeDates.isEmpty == false ? 1 : 60)) { context in
@@ -12,19 +15,31 @@ struct AccountSummaryView: View {
     }
 
     private func summary(at now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 9) {
-                ProviderIcon(provider: entry.account.provider).frame(width: 22, height: 22)
+        VStack(alignment: .leading, spacing: compact ? 8 : 12) {
+            if compact {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.displayName).font(.headline).lineLimit(1).truncationMode(.middle)
-                        .help(entry.displayName)
-                    Text(entry.account.provider.title).font(.caption).foregroundStyle(.secondary)
+                    Text(entry.displayName).font(.system(size: 12, weight: .semibold))
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    HStack {
+                        Text(entry.snapshot?.plan ?? "Plan unavailable").font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if entry.refreshing { ProgressView().controlSize(.mini) }
+                    }
                 }
-                Spacer(minLength: 4)
-                VStack(alignment: .trailing, spacing: 3) {
-                    Text(entry.snapshot?.plan ?? "Plan unavailable").font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(1).help(entry.snapshot?.plan ?? "The provider did not report a plan")
-                    if entry.refreshing { ProgressView().controlSize(.small) }
+            } else {
+                HStack(alignment: .top, spacing: 9) {
+                    ProviderIcon(provider: entry.account.provider).frame(width: 22, height: 22)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(entry.displayName).font(.headline).lineLimit(1).truncationMode(.middle)
+                            .help(entry.displayName)
+                        Text(entry.account.provider.title).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text(entry.snapshot?.plan ?? "Plan unavailable").font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).help(entry.snapshot?.plan ?? "The provider did not report a plan")
+                        if entry.refreshing { ProgressView().controlSize(.small) }
+                    }
                 }
             }
             if let snapshot = entry.snapshot {
@@ -45,12 +60,12 @@ struct AccountSummaryView: View {
                     Divider()
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
-                            Text("Available resets").font(.callout.weight(.medium))
+                            Text("Available resets").font(textFont.weight(.medium))
                             Spacer(minLength: 4)
                             Text(snapshot.resetCredits.map { "\($0.availableCount)" } ?? "Unavailable")
-                                .font(.callout.monospacedDigit())
+                                .font(textFont.monospacedDigit())
                         }
-                        if let expiry = snapshot.resetCredits?.expirations.first {
+                        if !compact, let expiry = snapshot.resetCredits?.expirations.first {
                             Text("Next known expiry \(expiry.usageResetText())")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
@@ -60,9 +75,9 @@ struct AccountSummaryView: View {
                     Divider()
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
-                            Text("Credits").font(.callout.weight(.medium))
+                            Text("Credits").font(textFont.weight(.medium))
                             Spacer()
-                            Text("\(formatted(left)) left").font(.callout.monospacedDigit())
+                            Text("\(formatted(left)) left").font(textFont.monospacedDigit())
                         }
                         if let quota = creditQuota { quotaBar(quota) }
                         HStack {
@@ -84,11 +99,15 @@ struct AccountSummaryView: View {
     @ViewBuilder private func metricRow(_ metric: UsageMetric) -> some View {
         if metric.kind == .quota {
             VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
-                    Text(metric.title).font(.callout.weight(.medium))
-                    Text(metric.value == nil ? "Unavailable" : "\(MenuBarAccountImage.text(metric, provider: entry.account.provider)) left")
-                        .font(.callout.monospacedDigit()).foregroundStyle(metric.remainingColor)
-                    Spacer(minLength: 0)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        Text(metric.title).font(textFont.weight(.medium))
+                        quotaValue(metric)
+                    }.fixedSize()
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(metric.title).font(textFont.weight(.medium))
+                        quotaValue(metric)
+                    }
                 }
                 quotaBar(metric)
                 if let reset = metric.resetsAt { resetLabel(reset) }
@@ -97,18 +116,25 @@ struct AccountSummaryView: View {
         } else {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(metric.title == "Credit balance" ? "Wallet credits" : metric.title).font(.callout)
+                    Text(metric.title == "Credit balance" ? "Wallet credits" : metric.title).font(textFont)
+                        .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 6)
                     if metric.kind != .note {
-                        Text(formatted(metric)).font(.callout.monospacedDigit())
+                        Text(formatted(metric)).font(textFont.monospacedDigit()).fixedSize()
                     }
                 }
                 if let reset = metric.resetsAt { resetLabel(reset) }
                 if let detail = metric.detail {
-                    Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(compact ? 2 : nil).fixedSize(horizontal: false, vertical: true).help(detail)
                 }
             }
         }
+    }
+
+    private func quotaValue(_ metric: UsageMetric) -> some View {
+        Text(metric.value == nil ? "Unavailable" : "\(MenuBarAccountImage.text(metric, provider: entry.account.provider)) left")
+            .font(textFont.monospacedDigit()).foregroundStyle(metric.remainingColor)
     }
 
     @ViewBuilder private func quotaBar(_ metric: UsageMetric) -> some View {
@@ -125,8 +151,10 @@ struct AccountSummaryView: View {
     }
 
     private func resetLabel(_ reset: Date) -> some View {
-        Text(reset <= Date() ? "Reset time passed — refresh to update" : "Resets \(reset.usageResetText())")
-            .font(.caption).foregroundStyle(.secondary)
+        let date = compact ? reset.formatted(.dateTime.month(.abbreviated).day().hour().minute()) : reset.usageResetText()
+        return Text(reset <= Date() ? "Reset passed — refresh" : "Resets \(date)")
+            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            .help(reset.usageResetText())
     }
 
     private func formatted(_ metric: UsageMetric) -> String {
@@ -135,6 +163,35 @@ struct AccountSummaryView: View {
             return value.formatted(.currency(code: metric.unit))
         }
         return value.formatted(.number.precision(.fractionLength(0...2))) + (metric.unit == "credits" ? "" : " \(metric.unit)")
+    }
+}
+
+struct ProviderAccountGrid<Content: View>: View {
+    let entries: [AccountEntry]
+    @ViewBuilder var content: (AccountEntry) -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let provider = entries.first?.account.provider {
+                HStack(spacing: 8) {
+                    ProviderIcon(provider: provider).frame(width: 22, height: 22)
+                    Text(provider.title).font(.headline)
+                    Text("\(entries.count) \(entries.count == 1 ? "account" : "accounts")")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            ForEach(Array(stride(from: 0, to: entries.count, by: 2)), id: \.self) { start in
+                HStack(alignment: .top, spacing: 12) {
+                    content(entries[start]).frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                    if start + 1 < entries.count {
+                        content(entries[start + 1]).frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                    } else {
+                        Color.clear.frame(minWidth: 0, maxWidth: .infinity, maxHeight: 1)
+                    }
+                }
+                if start + 2 < entries.count { Divider() }
+            }
+        }
     }
 }
 
