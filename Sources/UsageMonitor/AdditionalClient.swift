@@ -82,7 +82,8 @@ struct AdditionalClient: Sendable {
         case .amp:
             guard root["ok"] as? Bool == true, let result = root["result"] as? [String: Any],
                   let text = result["displayText"] as? String else { throw MonitorError.invalidResponse }
-            reportedEmail = capture(#"(?m)^Signed in as ([^\s@]+@[^\s@]+)\s*$"#, in: text).first
+            reportedEmail = capture(#"(?m)^Signed in as ([^\s@()]+@[^\s@()]+)(?: \([^\r\n)]+\))?\s*$"#, in: text).first
+            plan = capture(#"(?m)^Amp ([^\r\n:]{1,100}?) Tier:"#, in: text).first
             let agent = capture(#"agent usage \$([0-9.]+) of \$([0-9.]+) remaining"#, in: text).compactMap(Double.init)
             let orb = capture(#"orb usage ([0-9.]+)h of ([0-9.]+)h a1\.small orb hours remaining"#, in: text).compactMap(Double.init)
             if agent.count == 2 {
@@ -94,6 +95,16 @@ struct AdditionalClient: Sendable {
                             .init(title: "Orb remaining", kind: .count, value: orb[0], unit: "a1.small hours"),
                             .init(title: "Orb allowance", kind: .cap, value: orb[1], unit: "a1.small hours")]
             }
+            // Legacy percentages are already remaining, not spent dollars or hours.
+            let legacy = [#"(?m)^Subscription ([^\r\n:]{1,100}): "#, #"(?m)^Amp ([^\r\n:]{1,100}) Subscription: "#]
+                .map { capture($0 + #"([0-9]+(?:\.[0-9]+)?)% other usage and ([0-9]+(?:\.[0-9]+)?)% orb usage remaining\b"#, in: text) }
+                .first { $0.count == 3 }
+            if let legacy, let other = Double(legacy[1]), let orbPercent = Double(legacy[2]),
+               (0...100).contains(other), (0...100).contains(orbPercent) {
+                plan = plan ?? legacy[0]
+                if agent.isEmpty { metrics.append(.init(title: "Agent", kind: .quota, value: other)) }
+                if orb.isEmpty { metrics.append(.init(title: "Orb", kind: .quota, value: orbPercent)) }
+            }
             for line in text.split(separator: "\n") {
                 let parts = capture(#"^(Individual credits|Workspace [^:\n]{1,100}): \$([0-9.]+) remaining\s*$"#, in: String(line))
                 if parts.count == 2, let balance = Double(parts[1]), balance.isFinite {
@@ -101,14 +112,14 @@ struct AdditionalClient: Sendable {
                 }
             }
             if metrics.isEmpty { throw MonitorError.invalidResponse }
-            if agent.isEmpty { metrics.append(.init(title: "Agent allowance", kind: .note, value: nil, detail: "Not reported by this plan")) }
-            if orb.isEmpty { metrics.append(.init(title: "Orb usage", kind: .note, value: nil, detail: "Unavailable — not returned by Amp")) }
+            if !metrics.contains(where: { $0.title == "Agent" }) { metrics.append(.init(title: "Agent allowance", kind: .note, value: nil, detail: "Not reported by this plan")) }
+            if !metrics.contains(where: { $0.title == "Orb" }) { metrics.append(.init(title: "Orb usage", kind: .note, value: nil, detail: "Unavailable — not returned by Amp")) }
             // Amp's own Account panel has separate subscription buckets. The CLI's
             // dollar allowance is not assumed to be the same meter as that panel.
             if let data = try? await request("https://ampcode.com/_app/remote/rjke8/getAccountSettingsPanelData", secrets: secrets),
                let panel = try? ampDashboard(data) {
                 reportedEmail = panel.reportedEmail ?? reportedEmail
-                plan = panel.plan
+                plan = panel.plan ?? plan
                 if !panel.metrics.isEmpty {
                     metrics.removeAll { ["Agent", "Agent remaining", "Agent allowance", "Orb", "Orb remaining", "Orb allowance", "Orb usage"].contains($0.title) }
                     metrics.insert(contentsOf: panel.metrics, at: 0)

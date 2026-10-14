@@ -10,13 +10,14 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
 
 @Test func ampKeepsAgentDollarsOrbHoursAndCreditsSeparate() async throws {
     let client = AdditionalClient(http: additionalHTTP(#"""
-    {"ok":true,"result":{"displayText":"Signed in as test@example.test\nAmp Megawatt Tier: agent usage $18.57 of $20 remaining, orb usage 732.8h of 750h a1.small orb hours remaining - period 2026-09-13 to 2026-10-13\nIndividual credits: $31.25 remaining"}}
+    {"ok":true,"result":{"displayText":"Signed in as test@example.test (Fixture team)\nAmp Megawatt Tier: agent usage $18.57 of $20 remaining, orb usage 732.8h of 750h a1.small orb hours remaining - period 2026-09-13 to 2026-10-13\nIndividual credits: $31.25 remaining"}}
     """#))
     let result = try await client.fetch(Account(label: "", provider: .amp), secrets: .init(key: "fixture-amp"))
     #expect(result.metrics.contains(.init(title: "Agent remaining", kind: .balance, value: 18.57, unit: "USD")))
     #expect(result.metrics.contains(.init(title: "Orb remaining", kind: .count, value: 732.8, unit: "a1.small hours")))
     #expect(result.metrics.contains(.init(title: "Individual credits", kind: .balance, value: 31.25, unit: "USD")))
     #expect(result.reportedEmail == "test@example.test")
+    #expect(result.plan == "Megawatt")
     #expect(result.identity == nil) // Display metadata does not invent a stable owner ID.
     #expect(!result.metrics.contains { $0.title == "Provider-reported agent cap" })
     let missingOrb = try await AdditionalClient(http: additionalHTTP(#"{"ok":true,"result":{"displayText":"agent usage $55.02 of $600 remaining\nIndividual credits: $17 remaining"}}"#))
@@ -24,6 +25,27 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     #expect(!missingOrb.metrics.contains { $0.kind == .cap && $0.unit == "USD" })
     #expect(missingOrb.metrics.first { $0.title == "Orb usage" }?.detail == "Unavailable — not returned by Amp")
     #expect(!missingOrb.metrics.contains { $0.title == "Orb" && $0.value != nil })
+}
+
+@Test(arguments: ["Subscription Gigawatt:", "Amp Gigawatt Subscription:"])
+func ampLegacyFallbackPreservesIndependentPercentagesWithoutInventingDollarBalances(_ heading: String) async throws {
+    let display = "Signed in as legacy@example.test\n\(heading) 19% other usage and 83% orb usage remaining - resets upon renewal in 4 days\nIndividual credits: $27.50 remaining"
+    let body = try JSONSerialization.data(withJSONObject: ["ok": true, "result": ["displayText": display]])
+    let client = AdditionalClient(http: ProviderHTTP { request in
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer selected-legacy")
+        #expect(request.value(forHTTPHeaderField: "Cookie") == nil)
+        let panel = request.url?.path.contains("/remote/") == true
+        return (panel ? Data() : body, HTTPURLResponse(url: request.url!, statusCode: panel ? 403 : 200,
+                                                       httpVersion: nil, headerFields: nil)!)
+    })
+    let result = try await client.fetch(.init(label: "", provider: .amp), secrets: .init(key: "selected-legacy"))
+    #expect(result.reportedEmail == "legacy@example.test")
+    #expect(result.plan == "Gigawatt")
+    #expect(result.metrics.filter { $0.kind == .quota }.map(\.value) == [19, 83])
+    #expect(result.metrics.allSatisfy { $0.resetsAt == nil }) // Rounded countdowns are not exact reset dates.
+    #expect(result.metrics.filter { $0.kind == .balance }.map(\.value) == [27.5])
+    #expect(!result.metrics.contains { $0.kind == .cap || $0.kind == .note || $0.kind == .count })
+    #expect(result.identity == nil)
 }
 
 @Test func ampDashboardSuppliesEmailTierAndIndependentOrbQuotaForTheSelectedToken() async throws {

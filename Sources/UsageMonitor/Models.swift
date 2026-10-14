@@ -362,7 +362,7 @@ enum MonitorError: Error, LocalizedError, Equatable {
         case .missingScope: "This token cannot read subscription usage. Use Claude subscription sign-in."
         case .identityChanged: "This profile now belongs to a different account or organization. Remove it and add a new account."
         case .duplicateAccount: "This account and organization are already connected. Sign in with a different account."
-        case .keychainUnavailable: "The scoped Keychain entry is unavailable. Unlock the login Keychain and retry."
+        case .keychainUnavailable: "Keychain access is blocked for this connection. Open the account window and choose Allow Keychain access. If macOS asks, unlock the login Keychain and approve only this entry."
         case .invalidProfile: "The account profile is unsafe or inaccessible. No credentials were used."
         case .invalidResponse: "The provider returned an unsupported response. Usage is unavailable."
         case .http(401): "The provider rejected these credentials. Reconnect this account."

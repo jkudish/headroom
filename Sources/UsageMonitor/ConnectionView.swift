@@ -6,12 +6,23 @@ struct ConnectionView: View {
     let account: Account?
     let demo: Bool
     let finish: () -> Void
+    var discover: (Bool, Bool) -> LocalCredentialDiscovery.Report = { environment, dotenv in
+        let values = environment ? ProcessInfo.processInfo.environment : [:]
+        if dotenv {
+            return LocalCredentialDiscovery.scan(environment: values,
+                dotenvFile: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".env"))
+        }
+        return LocalCredentialDiscovery.scan(environment: values)
+    }
     @State private var key = ""
     @State private var username = ""
     @State private var selector = ""
     @State private var mode = "wallet"
     @State private var region = "global"
     @State private var error: String?
+    @State private var readEnvironment = true
+    @State private var readDotenv = true
+    @State private var discoveryReport: LocalCredentialDiscovery.Report?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -41,6 +52,9 @@ struct ConnectionView: View {
                 }
                 Text("Saved only in this Mac's Keychain, separately for each connection.")
                     .font(.caption).foregroundStyle(.secondary)
+                if LocalCredentialDiscovery.supports(provider) {
+                    discoverySection
+                }
             }
             if let error { UsageWarning(message: error) }
             HStack {
@@ -60,15 +74,99 @@ struct ConnectionView: View {
             region = account?.options["region"] ?? "global"
             selector = account?.options[provider == .exa ? "keyID" : "organizationID"] ?? ""
         }
-        .onDisappear { key = ""; username = "" }
+        .onDisappear { key = ""; username = ""; discoveryReport = nil }
+    }
+
+    private var discoverySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            Text("Use a local credential").font(.headline)
+            HStack {
+                Toggle("~/.env", isOn: $readDotenv)
+                Toggle("App environment", isOn: $readEnvironment)
+                Spacer()
+                Button("Scan") {
+                    discoveryReport = discover(readEnvironment, readDotenv)
+                }
+                .disabled(demo || (!readEnvironment && !readDotenv))
+                .accessibilityIdentifier("scanLocalCredentials")
+            }.toggleStyle(.checkbox).font(.caption)
+            Text("Shell startup files are not run. App environment may differ from your terminal.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let discoveryReport {
+                        let candidates = discoveryReport.candidates.filter { $0.provider == provider }
+                        ForEach(candidates) { candidate in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(candidate.variable).font(.caption.monospaced()).textSelection(.enabled)
+                                if !candidate.companionVariables.isEmpty {
+                                    Text("With \(candidate.companionVariables.joined(separator: ", "))")
+                                        .font(.caption.monospaced()).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                HStack {
+                                    Text("\(candidate.source.title) · \(candidate.maskedValue)")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button(account == nil ? "Add" : "Update") {
+                                        guard let secrets = candidate.connectionSecrets(), matchesOptions(candidate) else { return }
+                                        save(secrets, optionHints: candidate.optionHints)
+                                    }
+                                    .disabled(demo || !candidate.isSelectable || !matchesOptions(candidate))
+                                    .accessibilityLabel("\(account == nil ? "Add" : "Update") credential from \(candidate.variable) in \(candidate.source.title), companions: \(candidate.companionVariables.joined(separator: ", "))")
+                                    .accessibilityIdentifier("useLocalCredential-\(candidate.variable)-\(candidate.source.title)\(candidate.companionVariables.isEmpty ? "" : "-" + candidate.companionVariables.joined(separator: "-"))")
+                                }
+                                Text(discoveryHint(candidate))
+                                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                    .help(candidate.hint)
+                            }
+                        }
+                        if candidates.isEmpty {
+                            Text("No matching credential found in the selected sources.").font(.caption)
+                        }
+                        ForEach(Array(discoveryReport.issues.enumerated()), id: \.offset) { _, issue in
+                            Text(issue.message).font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else {
+                        Text("Scan only when you want to read these sources. Nothing is saved until you choose Add or Update.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(height: 130)
+        }
+        .onChange(of: readDotenv) { _, _ in discoveryReport = nil }
+        .onChange(of: readEnvironment) { _, _ in discoveryReport = nil }
+    }
+
+    private func discoveryHint(_ candidate: LocalCredentialDiscovery.Candidate) -> String {
+        guard matchesOptions(candidate) else { return "Report options differ. Add a new connection instead." }
+        switch candidate.eligibility {
+        case .selectable: return "Credential validity and billing permissions are not yet verified."
+        case .unsupportedCredentialType: return "Requires billing/admin credentials, not an ordinary API key."
+        case .missingCompanions(let names): return "Requires \(names.joined(separator: " or ")) from the same source."
+        }
+    }
+
+    private func matchesOptions(_ candidate: LocalCredentialDiscovery.Candidate) -> Bool {
+        guard let account else { return true }
+        return candidate.optionHints.allSatisfy { name, value in
+            let saved = account.options[name] ?? (provider == .openRouter && name == "mode" ? "wallet" : nil)
+            return saved == value
+        }
     }
 
     private func save() {
+        let secrets = ConnectionSecrets(key: key.trimmingCharacters(in: .whitespacesAndNewlines),
+                                        username: provider == .dataForSEO ? username.trimmingCharacters(in: .whitespacesAndNewlines) : nil)
+        save(secrets)
+    }
+
+    private func save(_ secrets: ConnectionSecrets, optionHints: [String: String] = [:]) {
         guard !demo else { return }
         error = nil
         do {
-            let secrets = ConnectionSecrets(key: key.trimmingCharacters(in: .whitespacesAndNewlines),
-                                            username: provider == .dataForSEO ? username.trimmingCharacters(in: .whitespacesAndNewlines) : nil)
             let id: UUID
             if let account {
                 try monitor.reconnect(account.id, secrets: secrets)
@@ -79,9 +177,10 @@ struct ConnectionView: View {
                 if provider == .zai { options["region"] = region }
                 if provider == .exa { options["keyID"] = selector.trimmingCharacters(in: .whitespacesAndNewlines) }
                 if provider == .openAIAPI { options["organizationID"] = selector.trimmingCharacters(in: .whitespacesAndNewlines) }
+                options.merge(optionHints) { _, detected in detected }
                 id = try monitor.add(label: "", provider: provider, options: options, secrets: secrets)
             }
-            key = ""; username = ""
+            key = ""; username = ""; discoveryReport = nil
             finish()
             Task { await monitor.refresh(id) }
         } catch { self.error = (error as? MonitorError)?.localizedDescription ?? "Could not save this connection." }
