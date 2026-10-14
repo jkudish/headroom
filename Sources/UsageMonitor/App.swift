@@ -229,8 +229,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     }
                 }.buttonStyle(.borderless).font(.system(size: 12))
             }
-                .padding(.horizontal, 16).padding(.vertical, 10).frame(width: 360).fixedSize(horizontal: false, vertical: true))
-            content.frame.size = NSSize(width: 360, height: max(1, ceil(content.fittingSize.height)))
+                .padding(.horizontal, 16).padding(.vertical, 10).frame(width: 420).fixedSize(horizontal: false, vertical: true))
+            content.frame.size = NSSize(width: 420, height: max(1, ceil(content.fittingSize.height)))
             let row = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             row.view = content
             row.isEnabled = false

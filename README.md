@@ -1,6 +1,6 @@
 # Usage Monitor PoC
 
-Local macOS 14+ menu-bar app, written in Swift 6 with AppKit and SwiftUI. Connect multiple independent subscription and API accounts, including accounts that are not signed into your local CLIs. A native macOS menu groups accounts by provider, two equal columns within the existing 360-point content width; AppKit handles overflow. Emails wrap, with plans beneath them. One clickable menu-bar area combines the visible accounts' logos and up to two quota readings (session then weekly), or their available balance. Missing readings show a dash, not zero. Hover tooltips are disabled; the accessibility label still identifies accounts and meters. The account window uses the same grouping and can be resized.
+Local macOS 14+ menu-bar app, written in Swift 6 with AppKit and SwiftUI. Connect multiple independent subscription and API accounts, including accounts that are not signed into your local CLIs. A native macOS menu groups accounts by provider, two equal columns within a 420-point content width; AppKit handles overflow. Emails wrap, with plans beneath them. One clickable menu-bar area combines the visible accounts' logos and up to two quota readings (session then weekly), or their available balance. Missing readings show a dash, not zero. Hover tooltips are disabled; the accessibility label still identifies accounts and meters. The account window uses the same grouping and can be resized.
 
 ## Run
 
