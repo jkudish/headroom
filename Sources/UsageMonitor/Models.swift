@@ -150,9 +150,9 @@ struct ClaudeUsage: Decodable, Sendable {
                 count = sum.partialValue
                 if let end { expirations.append(end) }
             }
-            let expiry = expirations.min().map { " Next known expiry \($0.usageResetText())." } ?? ""
+            let expiry = expirations.min().map { " Next expiry \($0.usageResetText())." } ?? ""
             return .init(title: "Available resets", kind: .count, value: Double(count), unit: "resets",
-                         detail: "Saved resets; use may require reaching a limit.\(expiry)")
+                         detail: "May require reaching a limit.\(expiry)")
         }
     }
 
@@ -358,22 +358,22 @@ enum MonitorError: Error, LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .signInRequired: "Sign in to this account. Its credentials are missing or expired."
-        case .missingScope: "This token cannot read subscription usage. Use Claude subscription sign-in."
-        case .identityChanged: "This profile now belongs to a different account or organization. Remove it and add a new account."
-        case .duplicateAccount: "This account and organization are already connected. Sign in with a different account."
-        case .keychainUnavailable: "Keychain access is blocked for this connection. Open the account window and choose Allow Keychain access. If macOS asks, unlock the login Keychain and approve only this entry."
-        case .invalidProfile: "The account profile is unsafe or inaccessible. No credentials were used."
-        case .invalidResponse: "The provider returned an unsupported response. Usage is unavailable."
-        case .http(401): "The provider rejected these credentials. Reconnect this account."
-        case .http(403): "The provider denied access. Check the credential's billing permissions."
-        case .http(429): "The provider rate-limited usage checks. Wait before refreshing."
+        case .signInRequired: "Credentials missing or expired. Reconnect this account."
+        case .missingScope: "Subscription access required. Sign in through Claude Code."
+        case .identityChanged: "Account or organization changed. Remove this account and add it again."
+        case .duplicateAccount: "Already connected. Choose a different account."
+        case .keychainUnavailable: "Keychain access blocked. Choose Allow Keychain access in the account window."
+        case .invalidProfile: "Account files are unsafe or inaccessible. No credentials were used."
+        case .invalidResponse: "Unsupported provider response. Usage unavailable."
+        case .http(401): "Credentials rejected. Reconnect this account."
+        case .http(403): "Access denied. Check billing permissions."
+        case .http(429): "Too many usage checks. Wait before refreshing."
         case .http(let status): "Usage request failed (HTTP \(status))."
-        case .network: "Could not reach the provider. Check your connection and retry."
+        case .network: "Provider unreachable. Check your connection and retry."
         case .helperMissing: "Install Claude Code at ~/.local/bin/claude, /opt/homebrew/bin/claude, or /usr/local/bin/claude."
-        case .helperFailed: "Provider sign-in did not finish. Retry the login."
+        case .helperFailed: "Sign-in failed. Try again."
         case .loginBusy: "Finish or cancel the current sign-in first."
-        case .invalidCode: "Paste the authorization code shown by Claude, not an API key or URL."
+        case .invalidCode: "Paste Claude's authorization code, not an API key or URL."
         case .unsupported(let message): message
         }
     }

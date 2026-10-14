@@ -13,7 +13,7 @@ enum LocalCredentialDiscovery {
 
     enum Source: String, Hashable, Sendable {
         case inheritedEnvironment, dotenv
-        var title: String { self == .dotenv ? "Selected dotenv file" : "App inherited environment" }
+        var title: String { self == .dotenv ? "Dotenv file" : "App environment" }
     }
 
     enum Eligibility: Equatable, Sendable {
@@ -29,11 +29,11 @@ enum LocalCredentialDiscovery {
 
         var message: String {
             switch self {
-            case .fileUnavailable: "The selected dotenv file is not an accessible regular local file."
-            case .fileTooLarge: "The dotenv file exceeds the 256 KiB limit."
-            case .tooManyLines: "The dotenv file exceeds the 4096-line limit."
-            case .invalidUTF8: "The dotenv file is not valid UTF-8."
-            case .ambiguousSyntax: "The dotenv file contains unsupported shell or multiline syntax. No file credentials were discovered."
+            case .fileUnavailable: "File unavailable. Use a regular local file, not a symlink."
+            case .fileTooLarge: "File exceeds 256 KiB."
+            case .tooManyLines: "File exceeds 4096 lines."
+            case .invalidUTF8: "File must use UTF-8."
+            case .ambiguousSyntax: "Shell or multiline syntax found. No file keys loaded."
             case .rejectedAssignments(let count): "Skipped \(count) unsafe, empty, or oversized assignments."
             }
         }
@@ -68,9 +68,9 @@ enum LocalCredentialDiscovery {
         var isSelectable: Bool { eligibility == .selectable }
         var hint: String {
             switch eligibility {
-            case .missingCompanions(let names): "Requires \(names.joined(separator: " or ")) from the same source. \(provider.connectionHelp)"
-            case .unsupportedCredentialType: "Ordinary inference/search keys cannot read this connector's billing. \(provider.connectionHelp)"
-            case .selectable: "\(provider.connectionHelp) Credential validity and permissions have not been checked."
+            case .missingCompanions(let names): "Needs \(names.joined(separator: " or ")) in this source."
+            case .unsupportedCredentialType: "Ordinary API keys cannot read billing. \(provider.connectionHelp)"
+            case .selectable: "\(provider.connectionHelp) Key validity and permissions are unverified."
             }
         }
 

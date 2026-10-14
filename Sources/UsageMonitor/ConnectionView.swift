@@ -29,15 +29,15 @@ struct ConnectionView: View {
             Text("\(account == nil ? "Connect" : "Reconnect") \(provider.title)").font(.title2.weight(.semibold))
             Text(provider.connectionHelp).font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Link("Open provider dashboard", destination: provider.dashboardURL)
+            Link("Dashboard", destination: provider.dashboardURL)
             if provider.supportsRead && !provider.usesHelper {
                 if provider == .dataForSEO { TextField("API login", text: $username) }
                 SecureField(provider == .dataForSEO ? "API password" : provider == .cursor ? "Cursor session Cookie header" : "API key or access token", text: $key)
                     .accessibilityIdentifier("connectionCredential")
                 if provider == .openRouter {
                     Picker("Report", selection: $mode) {
-                        Text("Account wallet (management key)").tag("wallet")
-                        Text("This API key's spend and cap").tag("key")
+                        Text("Wallet · management key").tag("wallet")
+                        Text("API key · spend and cap").tag("key")
                     }.disabled(account != nil)
                 }
                 if provider == .zai {
@@ -50,7 +50,7 @@ struct ConnectionView: View {
                     TextField(provider == .exa ? "API key ID to report" : "Organization ID (optional)", text: $selector)
                         .disabled(account != nil)
                 }
-                Text("Saved only in this Mac's Keychain, separately for each connection.")
+                Text("Saved in your Mac's Keychain.")
                     .font(.caption).foregroundStyle(.secondary)
                 if LocalCredentialDiscovery.supports(provider) {
                     discoverySection
@@ -61,7 +61,7 @@ struct ConnectionView: View {
                 Button(provider.supportsRead ? "Cancel" : "Close", action: finish)
                 Spacer()
                 if provider.supportsRead && !provider.usesHelper {
-                    Button("Save connection", action: save).keyboardShortcut(.defaultAction)
+                    Button("Save", action: save).keyboardShortcut(.defaultAction)
                         .disabled(demo || key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                   || (provider == .dataForSEO && username.isEmpty)
                                   || (provider == .exa && selector.isEmpty))
@@ -80,7 +80,7 @@ struct ConnectionView: View {
     private var discoverySection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
-            Text("Use a local credential").font(.headline)
+            Text("Find a saved key").font(.headline)
             HStack {
                 Toggle("~/.env", isOn: $readDotenv)
                 Toggle("App environment", isOn: $readEnvironment)
@@ -91,11 +91,13 @@ struct ConnectionView: View {
                 .disabled(demo || (!readEnvironment && !readDotenv))
                 .accessibilityIdentifier("scanLocalCredentials")
             }.toggleStyle(.checkbox).font(.caption)
-            Text("Shell startup files are not run. App environment may differ from your terminal.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    if let discoveryReport {
+            Text("Scan reads these sources. Add or Update saves one key.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .help("The app never runs shell startup files. Its environment may differ from your terminal. Key validity and billing permissions are checked when fetching usage.")
+            if let discoveryReport {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
                         let candidates = discoveryReport.candidates.filter { $0.provider == provider }
                         ForEach(candidates) { candidate in
                             VStack(alignment: .leading, spacing: 4) {
@@ -123,29 +125,32 @@ struct ConnectionView: View {
                             }
                         }
                         if candidates.isEmpty {
-                            Text("No matching credential found in the selected sources.").font(.caption)
+                            Text("No matching keys found.").font(.caption)
                         }
                         ForEach(Array(discoveryReport.issues.enumerated()), id: \.offset) { _, issue in
                             Text(issue.message).font(.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                    } else {
-                        Text("Scan only when you want to read these sources. Nothing is saved until you choose Add or Update.")
-                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }.frame(height: 130)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(height: 140)
+            }
         }
         .onChange(of: readDotenv) { _, _ in discoveryReport = nil }
         .onChange(of: readEnvironment) { _, _ in discoveryReport = nil }
     }
 
     private func discoveryHint(_ candidate: LocalCredentialDiscovery.Candidate) -> String {
-        guard matchesOptions(candidate) else { return "Report options differ. Add a new connection instead." }
+        guard matchesOptions(candidate) else { return "Different report. Add as a new account." }
         switch candidate.eligibility {
-        case .selectable: return "Credential validity and billing permissions are not yet verified."
-        case .unsupportedCredentialType: return "Requires billing/admin credentials, not an ordinary API key."
-        case .missingCompanions(let names): return "Requires \(names.joined(separator: " or ")) from the same source."
+        case .selectable:
+            if provider == .openRouter {
+                return candidate.optionHints["mode"] == "key" ? "Reports this key's spend and cap." : "Reports the account wallet."
+            }
+            if let keyID = candidate.optionHints["keyID"] { return "Reports API key \(keyID)." }
+            if let organizationID = candidate.optionHints["organizationID"] { return "Reports organization \(organizationID)." }
+            return "Permissions checked after adding."
+        case .unsupportedCredentialType: return "Billing/admin key required."
+        case .missingCompanions(let names): return "Needs \(names.joined(separator: " or ")) in this source."
         }
     }
 

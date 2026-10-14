@@ -19,7 +19,7 @@ struct MonitorView: View {
                 Image(systemName: "gauge.with.dots.needle.50percent").font(.title2)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Usage Monitor").font(.title3.weight(.semibold))
-                    Text("\(monitor.entries.count) independent \(monitor.entries.count == 1 ? "connection" : "connections")")
+                    Text("\(monitor.entries.count) \(monitor.entries.count == 1 ? "account" : "accounts")")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -32,14 +32,14 @@ struct MonitorView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if demo {
-                        Label("Demo — fixture data, not live usage", systemImage: "testtube.2")
+                        Label("Demo data", systemImage: "testtube.2")
                             .font(.callout.weight(.medium)).foregroundStyle(.orange)
                     }
                     if monitor.entries.isEmpty {
                         VStack(spacing: 10) {
                             Image(systemName: "person.crop.circle.badge.plus").font(.system(size: 34)).foregroundStyle(.secondary)
-                            Text("All your accounts, separately.").font(.headline)
-                            Text("Connect a subscription or API account. Your existing CLI logins stay untouched.")
+                            Text("No accounts yet").font(.headline)
+                            Text("Use + to connect an account.")
                                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }.frame(maxWidth: .infinity).padding(.vertical, 26)
                     }
@@ -75,7 +75,7 @@ struct MonitorView: View {
                 if let id = removal { perform { try monitor.remove(id) } }
                 removal = nil
             }
-        } message: { Text("Delete only this app's saved profile and scoped credentials. Other logins stay untouched.") }
+        } message: { Text("Removes this app's saved account and credentials. Other logins are not affected.") }
         .onChange(of: login.accountID) { _, _ in code = "" }
     }
 
@@ -100,8 +100,8 @@ struct MonitorView: View {
                     .buttonStyle(.borderless).disabled(demo || entry.refreshing || entry.resetting || login.accountID != nil)
                 Spacer()
                 Menu {
-                    Button("Reconnect account…") { reconnect(entry.account) }
-                    Link("Provider dashboard", destination: entry.account.provider.dashboardURL)
+                    Button("Reconnect…") { reconnect(entry.account) }
+                    Link("Dashboard", destination: entry.account.provider.dashboardURL)
                     Button("Remove account", role: .destructive) { removal = entry.id }
                 } label: { Image(systemName: "ellipsis") }
                 .menuStyle(.borderlessButton).fixedSize().disabled(demo || login.accountID != nil || entry.resetting)
@@ -123,8 +123,9 @@ struct MonitorView: View {
                     }
                 }.disabled(demo || entry.refreshing || login.accountID != nil || granting != nil)
                 if entry.error == MonitorError.keychainUnavailable.localizedDescription {
-                    Text("Allow access only to this connection's Keychain entry. Choose Always Allow to enable later usage checks.")
+                    Text("Choose Always Allow for this account's Keychain entry.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        .help("Unlock the login Keychain if macOS asks. Approve only this entry to allow later usage checks.")
                 }
             }
         }
@@ -135,13 +136,14 @@ struct MonitorView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Sign in: \(monitor.entries.first(where: { $0.id == login.accountID })?.account.displayName ?? "Claude")").font(.headline)
             Text(login.provider == .codex
-                 ? "Open this link in the browser profile for the account you want. Enter the device code on OpenAI's page; this app waits for approval. Enable device code authorization in ChatGPT security settings if needed."
-                 : "Open this link in the browser profile for the account you want. Complete Claude's sign-in, then paste its code below if asked.")
+                 ? "Open the link in the right browser profile, then enter the code on OpenAI's page."
+                 : "Open the link in the right browser profile. Sign in, then paste Claude's code below.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .help(login.provider == .codex ? "Enable device code authorization in ChatGPT Security settings if sign-in is blocked." : "Use the browser profile for the account you want to connect.")
             if let url = login.authorizationURL {
                 HStack {
                     Link("Open \(login.provider.title) sign-in", destination: url)
-                    Button("Copy login link") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.absoluteString, forType: .string) }
+                    Button("Copy link") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.absoluteString, forType: .string) }
                 }
                 if let deviceCode = login.deviceCode {
                     HStack {

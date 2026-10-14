@@ -66,7 +66,7 @@ struct AccountSummaryView: View {
                                 .font(textFont.monospacedDigit())
                         }
                         if !compact, let expiry = snapshot.resetCredits?.expirations.first {
-                            Text("Next known expiry \(expiry.usageResetText())")
+                            Text("Next expiry \(expiry.usageResetText())")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -90,7 +90,7 @@ struct AccountSummaryView: View {
             } else if let message = entry.error {
                 UsageWarning(message: message)
             } else {
-                Text(entry.refreshing ? "Checking usage…" : "Usage unavailable until this account connects.")
+                Text(entry.refreshing ? "Checking usage…" : "Connect to see usage.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -111,7 +111,7 @@ struct AccountSummaryView: View {
                 }
                 quotaBar(metric)
                 if let reset = metric.resetsAt { resetLabel(reset) }
-                else { Text("Reset time unavailable").font(.caption).foregroundStyle(.secondary) }
+                else { Text("Reset unavailable").font(.caption).foregroundStyle(.secondary) }
             }
         } else {
             VStack(alignment: .leading, spacing: 3) {
@@ -176,8 +176,9 @@ struct ProviderAccountGrid<Content: View>: View {
                 HStack(spacing: 8) {
                     ProviderIcon(provider: provider).frame(width: 22, height: 22)
                     Text(provider.title).font(.headline)
-                    Text("\(entries.count) \(entries.count == 1 ? "account" : "accounts")")
-                        .font(.caption).foregroundStyle(.secondary)
+                    if entries.count > 1 {
+                        Text("\(entries.count) accounts").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             ForEach(Array(stride(from: 0, to: entries.count, by: 2)), id: \.self) { start in
@@ -185,7 +186,7 @@ struct ProviderAccountGrid<Content: View>: View {
                     content(entries[start]).frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
                     if start + 1 < entries.count {
                         content(entries[start + 1]).frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
-                    } else {
+                    } else if entries.count != 1 || !entries[start].account.provider.usesHelper {
                         Color.clear.frame(minWidth: 0, maxWidth: .infinity, maxHeight: 1)
                     }
                 }

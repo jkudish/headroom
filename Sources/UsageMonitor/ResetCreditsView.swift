@@ -31,22 +31,22 @@ struct ResetCreditsView: View {
                             if let granted = credit.grantedAt { Text("Granted \(granted.usageResetText())").font(.caption).foregroundStyle(.secondary) }
                             Text(credit.expiresAt.map { "Expires \($0.usageResetText())" } ?? "Expiry not reported")
                                 .font(.caption).foregroundStyle(.secondary)
-                            Button("Use this reset…") { confirmation = credit }
+                            Button("Use reset…") { confirmation = credit }
                                 .disabled(demo || !credit.canUse || entry?.resetting == true || entry?.refreshing == true)
                                 .accessibilityIdentifier("useReset-\(credit.id)")
                         }
                         Divider()
                     }
-                    Text("The provider may return only part of the inventory. Only listed, available Codex resets can be selected.")
+                    Text("Only resets listed here can be used. The total may include others.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 360)
-            if entry?.resetting == true { ProgressView("Applying selected reset…").controlSize(.small) }
+            if entry?.resetting == true { ProgressView("Applying reset…").controlSize(.small) }
             if let result { Text(result).font(.callout).fixedSize(horizontal: false, vertical: true) }
             HStack {
                 Button("Close", action: finish).keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Refresh inventory") { Task { await monitor.refresh(accountID) } }
+                Button("Refresh") { Task { await monitor.refresh(accountID) } }
                     .disabled(demo || entry?.resetting == true || entry?.refreshing == true)
             }
         }.padding(22).frame(width: 400)
@@ -59,12 +59,12 @@ struct ResetCreditsView: View {
                 Task {
                     do { result = try await monitor.useReset(accountID, creditID: credit.id).message }
                     catch {
-                        result = "No reset result confirmed. \((error as? MonitorError)?.localizedDescription ?? "Could not save the request.") Refresh to check the outcome before trying again. If this credit remains available, a retry reuses the same request."
+                        result = "Reset unconfirmed. \((error as? MonitorError)?.localizedDescription ?? "Could not save the request.") Refresh before retrying."
                     }
                 }
             }.disabled(demo || entry?.resetting == true || entry?.refreshing == true)
         } message: { credit in
-            Text("Account: \(entry?.displayName ?? "Unavailable")\nCredit: \(credit.title ?? "Reset credit") (\(credit.id))\n\nThis asks OpenAI to reset Codex limits and may consume this credit. It cannot be undone.")
+            Text("Account: \(entry?.displayName ?? "Unavailable")\nCredit: \(credit.title ?? "Reset credit") (\(credit.id))\n\nResets Codex limits and may spend this credit. This cannot be undone.")
         }
     }
 }

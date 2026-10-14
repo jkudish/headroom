@@ -212,7 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         refreshDue(maxAge: 30)
         menu.removeAllItems()
         menu.appearance = NSApplication.shared.effectiveAppearance
-        if demo { menu.addItem(NSMenuItem(title: "Demo — fixture data, not live usage", action: nil, keyEquivalent: "")) }
+        if demo { menu.addItem(NSMenuItem(title: "Demo data", action: nil, keyEquivalent: "")) }
         if monitor.entries.isEmpty {
             menu.addItem(NSMenuItem(title: "No accounts connected", action: nil, keyEquivalent: ""))
         }
@@ -243,14 +243,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 let submenu = NSMenu()
                 submenu.autoenablesItems = false
                 let idle = !demo && login.accountID == nil && !entry.refreshing && !entry.resetting
-                addItem("Refresh account", to: submenu, action: #selector(refreshAccount), represented: entry.id.uuidString, enabled: idle)
-                addItem(entry.account.provider.usesHelper ? "Sign in / reconnect…" : "Update credentials…", to: submenu,
+                addItem("Refresh", to: submenu, action: #selector(refreshAccount), represented: entry.id.uuidString, enabled: idle)
+                addItem("Reconnect…", to: submenu,
                         action: #selector(reconnectAccount), represented: entry.id.uuidString, enabled: idle)
                 if provider == .codex {
-                    addItem("View / use resets…", to: submenu, action: #selector(showResetDetails),
+                    addItem("Available resets…", to: submenu, action: #selector(showResetDetails),
                             represented: entry.id.uuidString, enabled: login.accountID == nil && !entry.resetting)
                 }
-                addItem("Provider dashboard", to: submenu, action: #selector(openDashboard), represented: entry.id.uuidString)
+                addItem("Dashboard", to: submenu, action: #selector(openDashboard), represented: entry.id.uuidString)
                 addItem("Account settings…", to: submenu, action: #selector(showAccountWindow))
                 account.submenu = submenu
                 accounts.addItem(account)
@@ -259,8 +259,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             menu.addItem(actions)
             menu.addItem(.separator())
         }
-        let connect = NSMenuItem(title: "Connect service…", action: nil, keyEquivalent: "")
-        connect.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Connect service")
+        let connect = NSMenuItem(title: "Add account…", action: nil, keyEquivalent: "")
+        connect.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Add account")
         let providers = NSMenu()
         providers.autoenablesItems = false
         for provider in Provider.allCases.filter(\.supportsRead) {
