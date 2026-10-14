@@ -6,6 +6,12 @@ struct AccountSummaryView: View {
     let entry: AccountEntry
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: entry.snapshot?.availabilityChangeDates.isEmpty == false ? 1 : 60)) { context in
+            summary(at: context.date)
+        }
+    }
+
+    private func summary(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 9) {
                 ProviderIcon(provider: entry.account.provider).frame(width: 22, height: 22)
@@ -22,15 +28,14 @@ struct AccountSummaryView: View {
                 }
             }
             if let snapshot = entry.snapshot {
-                TimelineView(.periodic(from: .now, by: 60)) { context in
-                    Text("Updated \(snapshot.fetchedAt.formatted(.relative(presentation: .named)))")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .help("Last successful read: \(snapshot.fetchedAt.formatted())")
-                }
-                let creditLeft = snapshot.metrics.first { $0.title == "Credits left" }
-                let creditCap = snapshot.metrics.first { $0.title == "Credit limit" }
-                let creditQuota = snapshot.metrics.first { $0.title == "Individual credit quota" }
-                ForEach(Array(snapshot.metrics.enumerated()), id: \.offset) { _, metric in
+                Text("Updated \(snapshot.fetchedAt.formatted(.relative(presentation: .named)))")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .help("Last successful read: \(snapshot.fetchedAt.formatted())")
+                let metrics = snapshot.metrics(at: now)
+                let creditLeft = metrics.first { $0.title == "Credits left" }
+                let creditCap = metrics.first { $0.title == "Credit limit" }
+                let creditQuota = metrics.first { $0.title == "Individual credit quota" }
+                ForEach(Array(metrics.enumerated()), id: \.offset) { _, metric in
                     if !["Credits left", "Credits used", "Credit limit", "Individual credit quota"].contains(metric.title)
                         || creditLeft == nil || creditCap == nil {
                         metricRow(metric)

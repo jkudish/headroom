@@ -414,6 +414,32 @@ private actor ResetRecoveryFixture {
     #expect(credits.detail?.hasPrefix("Expires") == true)
 }
 
+@Test @MainActor func retainedClaudeSnapshotStopsOfferingExpiredCreditsWithoutAnotherFetch() async throws {
+    let fetched = Date()
+    let expiry = fetched.addingTimeInterval(1)
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let timestamp = formatter.string(from: expiry)
+    let usage = try JSONDecoder().decode(ClaudeUsage.self, from: response("""
+    {"extra_usage":{"is_enabled":true,"used_credits":1984},
+     "cedar_ember":{"eligible":true,"grants":[{"resets_left":5,"paused":false,"ends_at":"\(timestamp)"}]},
+     "iguana_necktie":{"limit_dollars":100,"remaining_dollars":80.5,"resets_at":"\(timestamp)"}}
+    """))
+    let snapshot = UsageSnapshot(identity: .init(accountID: "alice", organizationID: "org", email: "alice@example.test"),
+                                 usage: usage, fetchedAt: fetched)
+    let entry = AccountEntry(account: Account(label: "", provider: .claude), snapshot: snapshot)
+    #expect(snapshot.metrics.first { $0.title == "Available resets" }?.value == 5)
+    #expect(entry.menuBarMetrics.first?.value == 80.5)
+    try await Task.sleep(for: .seconds(1.1))
+    #expect(Date() > expiry)
+    #expect(snapshot.metrics.first { $0.title == "Available resets" }?.value == 0)
+    #expect(snapshot.metrics.first { $0.title == "Cloud credits" }?.value == nil)
+    #expect(snapshot.metrics.first { $0.title == "Cloud credits" }?.detail?.hasPrefix("Expired") == true)
+    #expect(entry.menuBarMetrics.isEmpty)
+    #expect(snapshot.metrics.first { $0.title == "Extra usage spent" }?.value == 19.84)
+    #expect(snapshot.fetchedAt == fetched)
+}
+
 @Test func claudeCreditAvailabilityAndResetDateBoundariesStaySeparate() throws {
     let now = ISO8601DateFormatter().date(from: "2030-01-01T00:00:00Z")!
     let cases: [(String, Double?, String)] = [
@@ -433,8 +459,9 @@ private actor ResetRecoveryFixture {
         """)
         let snapshot = UsageSnapshot(identity: .init(accountID: "alice", organizationID: "org", email: "alice@example.test"),
                                      usage: try JSONDecoder().decode(ClaudeUsage.self, from: data), fetchedAt: now)
-        #expect(snapshot.metrics.first { $0.title == "Available resets" }?.value == 2)
-        let money = try #require(snapshot.metrics.first { $0.title == "Cloud credits" })
+        let metrics = snapshot.metrics(at: now)
+        #expect(metrics.first { $0.title == "Available resets" }?.value == 2)
+        let money = try #require(metrics.first { $0.title == "Cloud credits" })
         #expect(money.value == expected)
         #expect(money.detail?.contains(detail) == true)
         #expect(money.resetsAt == nil)

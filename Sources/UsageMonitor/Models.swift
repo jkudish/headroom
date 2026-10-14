@@ -72,7 +72,7 @@ struct ClaudeUsage: Decodable, Sendable {
         cloudCredits = try? values.decode(CloudCredits.self, forKey: .cloudCredits)
     }
 
-    private static func parseDate(_ raw: String) -> Date? {
+    fileprivate static func parseDate(_ raw: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = formatter.date(from: raw) { return date }
@@ -201,16 +201,31 @@ extension Date {
 
 struct UsageSnapshot: Sendable {
     let identity: AccountIdentity?
-    let metrics: [UsageMetric]
+    private let fixedMetrics: [UsageMetric]
+    private let savedResets: ClaudeUsage.SavedResets?
+    private let cloudCredits: ClaudeUsage.CloudCredits?
     let fetchedAt: Date
     let plan: String?
     let resetCredits: LimitResetCredits?
     let reportedEmail: String?
 
+    var metrics: [UsageMetric] { metrics(at: Date()) }
+
+    func metrics(at now: Date) -> [UsageMetric] {
+        fixedMetrics + [savedResets?.metric(at: now), cloudCredits?.metric(at: now)].compactMap { $0 }
+    }
+
+    var availabilityChangeDates: [Date] {
+        let bounds = (savedResets?.grants ?? []).flatMap { [$0.startsAt, $0.endsAt] } + [cloudCredits?.expiresAt]
+        return Array(Set(bounds.compactMap { $0.flatMap(ClaudeUsage.parseDate) })).sorted()
+    }
+
     init(identity: AccountIdentity? = nil, metrics: [UsageMetric], fetchedAt: Date = Date(),
          plan: String? = nil, resetCredits: LimitResetCredits? = nil, reportedEmail: String? = nil) {
         self.identity = identity
-        self.metrics = metrics
+        fixedMetrics = metrics
+        savedResets = nil
+        cloudCredits = nil
         self.fetchedAt = fetchedAt
         self.plan = plan
         self.resetCredits = resetCredits
@@ -223,6 +238,8 @@ struct UsageSnapshot: Sendable {
         self.plan = plan
         resetCredits = nil
         reportedEmail = nil
+        savedResets = usage.savedResets
+        cloudCredits = usage.cloudCredits
         var rows = [UsageMetric(title: "5-hour", kind: .quota, value: usage.fiveHour?.remaining,
                                resetsAt: usage.fiveHour?.resetDate),
                     UsageMetric(title: "Weekly", kind: .quota, value: usage.sevenDay?.remaining,
@@ -235,9 +252,7 @@ struct UsageSnapshot: Sendable {
             rows.append(.init(title: "Extra usage", kind: .note, value: nil,
                               detail: usage.extraUsage?.isEnabled == false ? "Disabled" : "Unavailable"))
         }
-        if let resets = usage.savedResets?.metric(at: fetchedAt) { rows.append(resets) }
-        if let credits = usage.cloudCredits?.metric(at: fetchedAt) { rows.append(credits) }
-        metrics = rows
+        fixedMetrics = rows
     }
 }
 

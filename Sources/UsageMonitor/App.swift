@@ -17,6 +17,7 @@ enum UsageMonitorApp {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private var status: NSStatusItem?
+    private var availabilityTimer: Timer?
     private var appearanceObservation: NSKeyValueObservation?
     private var window: NSWindow?
     private var connectionWindow: NSWindow?
@@ -150,7 +151,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private func updateStatusItem() {
+        availabilityTimer?.invalidate()
+        availabilityTimer = nil
         guard let monitor else { return }
+        let now = Date()
         if status == nil { status = newStatusItem() }
         guard let button = status?.button else { return }
         if appearanceObservation == nil {
@@ -166,6 +170,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let label = labels.isEmpty ? "Usage Monitor — open all accounts" : labels.joined(separator: "\n")
         button.toolTip = nil
         button.setAccessibilityLabel(label)
+        let nextChange = monitor.entries.filter { $0.account.showInMenuBar }
+            .flatMap { $0.snapshot?.availabilityChangeDates ?? [] }.filter { $0 > now }.min()
+        if let nextChange {
+            // A one-shot display update at a known deadline, never a provider refresh.
+            let timer = Timer(fire: nextChange, interval: 0, repeats: false) { [weak self] _ in
+                Task { @MainActor in self?.updateStatusItem() }
+            }
+            availabilityTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -308,6 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        availabilityTimer?.invalidate()
         login.cancel()
         if let demoRoot { try? FileManager.default.removeItem(at: demoRoot) }
     }
