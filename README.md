@@ -1,4 +1,4 @@
-# Usage Monitor PoC
+# Headroom
 
 Local macOS 14+ menu-bar app, written in Swift 6 with AppKit and SwiftUI. Connect multiple independent subscription and API accounts, including accounts that are not signed into your local CLIs. A native macOS menu groups accounts by provider, two equal columns within a 420-point content width; a single Claude or Codex account uses the full row. AppKit handles overflow. Emails wrap, with plans beneath them. One clickable menu-bar area combines the visible accounts' logos and up to two quota readings (session then weekly), or their available balance. Missing readings show a dash, not zero. Hover tooltips are disabled; the accessibility label still identifies accounts and meters. The account window uses the same grouping and can be resized.
 
@@ -9,16 +9,16 @@ Requires Xcode command-line tools. Subscription sign-in also requires the releva
 ```sh
 swift test
 bash scripts/build-app.sh
-open .build/UsageMonitor.app --args --window
+open .build/Headroom.app --args --window
 ```
 
 The app appears in the Dock and Command-Tab while its account window is open; closing it returns to menu-bar-only mode. To inspect multiple providers with fixture data and no authentication or live requests:
 
 ```sh
-open -n .build/UsageMonitor.app --args --demo
+open -n .build/Headroom.app --args --demo
 ```
 
-The build is Apple Silicon, signed with Joachim Kudish's personal Apple Development certificate (team `K7RS6S7JX2`), and **not notarized**. The build script requires that certificate and fails rather than falling back to an ad-hoc identity. It does not install or replace an app.
+The build is Apple Silicon, signed with Joachim Kudish's personal Apple Development certificate (team `K7RS6S7JX2`), and **not notarized**. The build script requires that certificate and fails rather than falling back to an ad-hoc identity. It packages the monochrome glossy icon at standard macOS sizes. The existing bundle identifier, account storage and Keychain identities remain unchanged by the rename from Usage Monitor. The script does not install or replace an app.
 
 ## Connect accounts
 

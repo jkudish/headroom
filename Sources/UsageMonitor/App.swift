@@ -55,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             Task { for entry in monitor.entries { await monitor.refresh(entry.id) } }
         } catch {
             let alert = NSAlert()
-            alert.messageText = "Usage Monitor could not open account storage"
+            alert.messageText = "Headroom could not open account storage"
             alert.informativeText = "No credentials were read. Check permissions for ~/Library/Application Support/UsageMonitorPoC."
             alert.runModal()
             NSApplication.shared.terminate(nil)
@@ -192,7 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let readings = entry.menuBarMetrics.map { "\($0.title): \(MenuBarAccountImage.text($0, provider: entry.account.provider))" }.joined(separator: ", ")
             return "\(entry.account.provider.title) — \(entry.displayName): \(readings.isEmpty ? entry.error ?? "Usage unavailable" : readings)"
         }
-        let label = labels.isEmpty ? "Usage Monitor — open all accounts" : labels.joined(separator: "\n")
+        let label = labels.isEmpty ? "Headroom — open all accounts" : labels.joined(separator: "\n")
         button.toolTip = nil
         button.setAccessibilityLabel(label)
         let nextChange = monitor.entries.filter { $0.account.showInMenuBar }
@@ -319,7 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let main = NSMenu()
         let application = NSMenuItem()
         let appMenu = NSMenu()
-        let quit = NSMenuItem(title: "Quit Usage Monitor", action: #selector(quit), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit Headroom", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         appMenu.addItem(quit)
         application.submenu = appMenu
@@ -352,7 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if window == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 720),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-            window.title = demo ? "Usage Monitor — Demo" : "Usage Monitor"
+            window.title = demo ? "Headroom — Demo" : "Headroom"
             window.contentView = NSHostingView(rootView: view(monitor))
             window.minSize = NSSize(width: 360, height: 480)
             window.isReleasedWhenClosed = false

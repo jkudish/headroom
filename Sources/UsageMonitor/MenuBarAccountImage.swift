@@ -22,7 +22,7 @@ import AppKit
     static func make(_ entries: [AccountEntry], appearance: NSAppearance) -> NSImage {
         let images = entries.filter { $0.account.showInMenuBar }.map { make($0, appearance: appearance) }
         guard !images.isEmpty else {
-            return NSImage(systemSymbolName: "gauge.with.dots.needle.50percent", accessibilityDescription: "Usage Monitor")!
+            return NSImage(systemSymbolName: "line.3.horizontal.decrease", accessibilityDescription: "Headroom")!
         }
         let gap: CGFloat = 10
         let width = images.reduce(0) { $0 + $1.size.width } + gap * CGFloat(images.count - 1)

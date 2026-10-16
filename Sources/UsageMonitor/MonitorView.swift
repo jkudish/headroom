@@ -16,9 +16,12 @@ struct MonitorView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Image(systemName: "gauge.with.dots.needle.50percent").font(.title2)
+                if let image = Bundle.module.url(forResource: "headroom-icon", withExtension: "png").flatMap(NSImage.init(contentsOf:)) {
+                    Image(nsImage: image).resizable().scaledToFit()
+                        .frame(width: 28, height: 28).accessibilityHidden(true)
+                }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Usage Monitor").font(.title3.weight(.semibold))
+                    Text("Headroom").font(.title3.weight(.semibold))
                     Text("\(monitor.entries.count) \(monitor.entries.count == 1 ? "account" : "accounts")")
                         .font(.caption).foregroundStyle(.secondary)
                 }
