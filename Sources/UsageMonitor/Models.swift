@@ -29,6 +29,7 @@ struct Account: Codable, Identifiable, Equatable, Sendable {
 
     var displayName: String {
         if let email = identity?.email, !email.isEmpty, email != "Email unavailable" { return email }
+        if provider == .openRouter { return options["mode"] == "key" ? "API key" : "Wallet" }
         if let id = identity?.accountID, !id.isEmpty { return id }
         return "New \(provider.title) account"
     }

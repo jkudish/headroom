@@ -210,7 +210,7 @@ struct ProviderIcon: View {
     let provider: Provider
     var body: some View {
         if let image = provider.logo {
-            Image(nsImage: image).renderingMode(provider == .codex ? .template : .original)
+            Image(nsImage: image).renderingMode(image.isTemplate ? .template : .original)
                 .resizable().scaledToFit().accessibilityLabel(provider.title)
         } else {
             Text(String(provider.title.prefix(1))).font(.headline).accessibilityLabel(provider.title)
@@ -223,10 +223,31 @@ extension Provider {
         let name: String
         switch self {
         case .claude: name = "claude-logo"
-        case .codex: name = "openai-logo"
+        case .codex, .openAIAPI: name = "openai-logo"
         case .amp: name = "amp-logo"
-        default: return nil
+        case .openRouter: name = "openrouter-logo"
+        case .anthropicAPI: name = "anthropic-logo"
+        case .xaiAPI: name = "xai-logo"
+        case .grok: name = "grok-logo"
+        case .cursor: name = "cursor-logo"
+        case .zai: name = "zai-logo"
+        case .searchAPI: name = "searchapi-logo"
+        case .dataForSEO: name = "dataforseo-logo"
+        case .firecrawl: name = "firecrawl-logo"
+        case .serpAPI: name = "serpapi-logo"
+        case .tavily: name = "tavily-logo"
+        case .jina: name = "jina-logo"
+        case .exa: name = "exa-logo"
+        case .parallel: name = "parallel-logo"
+        case .valyu: name = "valyu-logo"
+        case .you: name = "you-logo"
+        case .brave: name = "brave-logo"
+        case .perplexity: name = "perplexity-logo"
+        case .gemini: name = "gemini-logo"
+        case .kagi: name = "kagi-logo"
         }
-        return Bundle.module.url(forResource: name, withExtension: "png").flatMap(NSImage.init(contentsOf:))
+        let image = Bundle.module.url(forResource: name, withExtension: "png").flatMap(NSImage.init(contentsOf:))
+        image?.isTemplate = [Self.codex, .openAIAPI, .amp, .valyu].contains(self)
+        return image
     }
 }

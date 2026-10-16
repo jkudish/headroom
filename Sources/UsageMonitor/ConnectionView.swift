@@ -149,7 +149,14 @@ struct ConnectionView: View {
             if let keyID = candidate.optionHints["keyID"] { return "Reports API key \(keyID)." }
             if let organizationID = candidate.optionHints["organizationID"] { return "Reports organization \(organizationID)." }
             return "Permissions checked after adding."
-        case .unsupportedCredentialType: return "Billing/admin key required."
+        case .unsupportedCredentialType:
+            if provider == .xaiAPI {
+                return "XAI_API_KEY is treated as an inference key, not tested. For a Management key, use XAI_MANAGEMENT_KEY or paste it above."
+            }
+            if provider == .exa {
+                return "EXA_API_KEY is treated as a search key, not tested. For billing, use EXA_SERVICE_KEY and EXA_API_KEY_ID, or enter both above."
+            }
+            return "Key type inferred from the variable name, not tested. Billing/admin key required."
         case .missingCompanions(let names): return "Needs \(names.joined(separator: " or ")) in this source."
         }
     }

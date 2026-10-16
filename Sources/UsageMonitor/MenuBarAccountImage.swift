@@ -50,7 +50,7 @@ import AppKit
             if let logo = entry.account.provider.logo {
                 let rect = NSRect(x: 0, y: 2, width: 18, height: 18)
                 logo.draw(in: rect)
-                if entry.account.provider == .codex {
+                if logo.isTemplate {
                     NSColor.labelColor.setFill()
                     rect.fill(using: .sourceIn)
                 }

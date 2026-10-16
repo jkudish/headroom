@@ -23,6 +23,26 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(unnamed.displayName == "org")
 }
 
+@Test func openRouterHeadingsDescribeTheConnectionWithoutDisplayingInternalUserIDs() throws {
+    let owner = AccountIdentity(accountID: "user_fixture_opaque", organizationID: "org-fixture", email: "")
+    let key = Account(label: "Legacy", identity: owner, provider: .openRouter, options: ["mode": "key"])
+    let restored = try JSONDecoder().decode(Account.self, from: JSONEncoder().encode(key))
+    #expect(restored.displayName == "API key")
+    #expect(AccountEntry(account: restored).displayName == "API key")
+    #expect(restored.identity == owner)
+    #expect(Account(label: "", provider: .openRouter).displayName == "Wallet")
+    #expect(Account(label: "", provider: .openRouter, options: ["mode": "key"]).displayName == "API key")
+    let identified = Account(label: "", identity: .init(accountID: "user_fixture", organizationID: "", email: "alice@example.test"),
+                             provider: .openRouter, options: ["mode": "key"])
+    #expect(identified.displayName == "alice@example.test")
+}
+
+@Test @MainActor func everyProviderHasABundledLogoInsteadOfALetterFallback() {
+    for provider in Provider.allCases {
+        #expect(provider.logo != nil, "Missing logo for \(provider.title)")
+    }
+}
+
 @Test func enteredKeysStayOutOfMetadataAndSeparateAcrossAccounts() throws {
     let store = try temporaryStore()
     let a = Account(label: "A", provider: .openRouter), b = Account(label: "B", provider: .openRouter)
