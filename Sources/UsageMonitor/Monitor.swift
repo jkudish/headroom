@@ -30,7 +30,7 @@ final class Monitor {
     private let consume: @Sendable (Account, String, UUID) async throws -> ResetOutcome
     private let now: () -> Date
     private var requests: [UUID: UUID] = [:]
-    private var refreshSchedule: [UUID: (after: Date, failures: Int)] = [:]
+    private var refreshSchedule: [UUID: (after: Date, failures: Int, rateLimited: Bool)] = [:]
 
     var nextAutomaticRefresh: Date? {
         entries.filter { !$0.refreshing && !$0.resetting && $0.account.provider.supportsRead }
@@ -150,13 +150,15 @@ final class Monitor {
             guard !Task.isCancelled, !isPaused() else { return }
             guard let entry = entries.first(where: { $0.id == id }), entry.account.provider.supportsRead,
                   !entry.refreshing, !entry.resetting, let schedule = refreshSchedule[id] else { continue }
-            let due = schedule.failures == 0 ? schedule.after.addingTimeInterval(maxAge - 60) : schedule.after
+            let due = schedule.failures == 0 && entry.account.provider != .claude
+                ? schedule.after.addingTimeInterval(maxAge - 60) : schedule.after
             if now() >= due { await refresh(id) }
         }
     }
 
     func refresh(_ id: UUID) async {
         guard let index = entries.firstIndex(where: { $0.id == id }), !entries[index].refreshing, !entries[index].resetting else { return }
+        if let schedule = refreshSchedule[id], schedule.rateLimited, now() < schedule.after { return }
         let requestID = UUID()
         requests[id] = requestID
         entries[index].refreshing = true
@@ -181,7 +183,8 @@ final class Monitor {
             try store.save(accounts)
             entries[current].account = accounts[current]
             entries[current].snapshot = snapshot
-            refreshSchedule[id] = (now().addingTimeInterval(60), 0)
+            let interval: TimeInterval = entries[current].account.provider == .claude ? 300 : 60
+            refreshSchedule[id] = (now().addingTimeInterval(interval), 0, false)
         } catch {
             guard requests[id] == requestID, let current = entries.firstIndex(where: { $0.id == id }) else { return }
             entries[current].snapshot = nil
@@ -194,7 +197,9 @@ final class Monitor {
                 refreshSchedule[id] = nil
             default:
                 let failures = min((refreshSchedule[id]?.failures ?? 0) + 1, 5)
-                refreshSchedule[id] = (now().addingTimeInterval(min(1800, 60 * pow(2, Double(failures)))), failures)
+                let limited = entries[current].account.provider == .claude && (error as? MonitorError) == .http(429)
+                let delay = min(1800, (limited ? 300 : 60) * pow(2, Double(failures)))
+                refreshSchedule[id] = (now().addingTimeInterval(delay), failures, limited)
             }
         }
         if requests[id] == requestID, let current = entries.firstIndex(where: { $0.id == id }) {

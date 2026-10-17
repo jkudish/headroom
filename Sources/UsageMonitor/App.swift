@@ -350,11 +350,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let monitor else { return }
         NSApplication.shared.setActivationPolicy(.regular)
         if window == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 720),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 720),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = demo ? "Headroom — Demo" : "Headroom"
             window.contentView = NSHostingView(rootView: view(monitor))
-            window.minSize = NSSize(width: 360, height: 480)
+            window.contentMinSize = NSSize(width: 740, height: 480)
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.center()

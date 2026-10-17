@@ -617,6 +617,68 @@ private actor FixtureService {
     }
 }
 
+@Test @MainActor func claudeChecksEveryFiveMinutesEvenWhenTheMenuReopens() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let claude = Account(label: "", provider: .claude), codex = Account(label: "", provider: .codex)
+    try store.save([claude, codex])
+    let service = PollFixture()
+    var now = Date(timeIntervalSince1970: 2_000_000_000)
+    let monitor = try Monitor(store: store, fetch: { try await service.fetch($0) }, now: { now })
+    await monitor.refresh(claude.id)
+    await monitor.refresh(codex.id)
+    now += 30
+    await monitor.refreshDue(maxAge: 30)
+    #expect(await service.count(claude.id) == 1)
+    #expect(await service.count(codex.id) == 2)
+    now += 269
+    await monitor.refreshDue(maxAge: 30)
+    #expect(await service.count(claude.id) == 1)
+    now += 1
+    await monitor.refreshDue()
+    await monitor.refreshDue(maxAge: 30)
+    #expect(await service.count(claude.id) == 2)
+    #expect(monitor.entries[0].snapshot?.metrics.first?.value == 2)
+}
+
+@Test @MainActor func claudeRateLimitCooldownAlsoBlocksManualRefreshes() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let claude = Account(label: "", provider: .claude), other = Account(label: "", provider: .claude)
+    try store.save([claude, other])
+    let service = PollFixture()
+    await service.fail(claude.id, with: .http(429))
+    var now = Date(timeIntervalSince1970: 2_000_000_000)
+    let monitor = try Monitor(store: store, fetch: { try await service.fetch($0) }, now: { now })
+    await monitor.refresh(claude.id)
+    await monitor.refresh(other.id)
+    for delay: TimeInterval in [600, 1200, 1800, 1800] {
+        let before = await service.count(claude.id)
+        await monitor.refresh(claude.id)
+        now += delay - 1
+        await monitor.refreshDue(maxAge: 30)
+        await monitor.refresh(claude.id)
+        #expect(await service.count(claude.id) == before)
+        #expect(monitor.entries[0].error == MonitorError.http(429).localizedDescription)
+        now += 1
+        await monitor.refreshDue()
+        #expect(await service.count(claude.id) == before + 1)
+    }
+    await service.fail(claude.id, with: nil)
+    now += 1800
+    await monitor.refreshDue()
+    let recovered = await service.count(claude.id)
+    #expect(monitor.entries[0].error == nil)
+    #expect(monitor.entries[0].snapshot?.metrics.first?.value == Double(recovered))
+    now += 299
+    await monitor.refreshDue(maxAge: 30)
+    #expect(await service.count(claude.id) == recovered)
+    now += 1
+    await monitor.refreshDue()
+    #expect(await service.count(claude.id) == recovered + 1)
+    #expect(await service.count(other.id) > 1)
+}
+
 @Test @MainActor func automaticUsageRefreshRespectsMinuteAndStaleMenuBoundaries() async throws {
     let store = try temporaryStore()
     defer { try? FileManager.default.removeItem(at: store.root) }
@@ -673,7 +735,7 @@ private actor FixtureService {
     #expect(await service.count(blocked.id) == 1)
     await service.fail(blocked.id, with: nil)
     await monitor.refresh(blocked.id) // Only an explicit user retry resumes this account.
-    now += 60
+    now += 300
     await monitor.refreshDue()
     #expect(await service.count(blocked.id) == 3)
 
@@ -729,7 +791,7 @@ private actor FixtureService {
     await monitor.refresh(second.id)
     try await service.set(second.id, identity: "second", utilization: 91)
     await service.pause()
-    now += 60
+    now += 300
     let batch = Task { await monitor.refreshDue(isPaused: { signingIn }) }
     await service.waitUntilStarted()
     monitor.beginLogin(first.id)

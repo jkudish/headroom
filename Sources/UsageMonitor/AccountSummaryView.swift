@@ -50,10 +50,19 @@ struct AccountSummaryView: View {
                 let creditLeft = metrics.first { $0.title == "Credits left" }
                 let creditCap = metrics.first { $0.title == "Credit limit" }
                 let creditQuota = metrics.first { $0.title == "Individual credit quota" }
-                ForEach(Array(metrics.enumerated()), id: \.offset) { _, metric in
-                    if !["Credits left", "Credits used", "Credit limit", "Individual credit quota"].contains(metric.title)
-                        || creditLeft == nil || creditCap == nil {
-                        metricRow(metric)
+                let displayedMetrics = metrics.filter {
+                    !["Credits left", "Credits used", "Credit limit", "Individual credit quota"].contains($0.title)
+                        || creditLeft == nil || creditCap == nil
+                }
+                let rows = ForEach(Array(displayedMetrics.enumerated()), id: \.offset) { _, metric in
+                    metricRow(metric)
+                }
+                if compact {
+                    rows
+                } else {
+                    LazyVGrid(columns: [GridItem(.flexible(), alignment: .topLeading), GridItem(.flexible(), alignment: .topLeading)],
+                              alignment: .leading, spacing: 18) {
+                        rows
                     }
                 }
                 if entry.account.provider == .codex {
@@ -210,8 +219,13 @@ struct ProviderIcon: View {
     let provider: Provider
     var body: some View {
         if let image = provider.logo {
-            Image(nsImage: image).renderingMode(image.isTemplate ? .template : .original)
-                .resizable().scaledToFit().accessibilityLabel(provider.title)
+            if image.isTemplate {
+                Rectangle().fill(.foreground)
+                    .mask { Image(nsImage: image).resizable().scaledToFit() }
+                    .accessibilityLabel(provider.title)
+            } else {
+                Image(nsImage: image).resizable().scaledToFit().accessibilityLabel(provider.title)
+            }
         } else {
             Text(String(provider.title.prefix(1))).font(.headline).accessibilityLabel(provider.title)
         }

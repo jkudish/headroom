@@ -12,66 +12,81 @@ struct MonitorView: View {
     @State private var error: String?
     @State private var removal: UUID?
     @State private var granting: UUID?
+    @State private var selectedProvider: Provider?
+
+    private var provider: Provider { selectedProvider ?? monitor.entries.first?.account.provider ?? .claude }
+    private var accounts: [AccountEntry] { monitor.entries.filter { $0.account.provider == provider } }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                if let image = Bundle.module.url(forResource: "headroom-icon", withExtension: "png").flatMap(NSImage.init(contentsOf:)) {
-                    Image(nsImage: image).resizable().scaledToFit()
-                        .frame(width: 28, height: 28).accessibilityHidden(true)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Headroom").font(.title3.weight(.semibold))
-                    Text("\(monitor.entries.count) \(monitor.entries.count == 1 ? "account" : "accounts")")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                addAccountMenu
-                Button { openWindow() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-                    .buttonStyle(.borderless)
-                    .help("Open account window").accessibilityLabel("Open account window")
-            }.padding(18)
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if demo {
-                        Label("Demo data", systemImage: "testtube.2")
-                            .font(.callout.weight(.medium)).foregroundStyle(.orange)
-                    }
-                    if monitor.entries.isEmpty {
-                        VStack(spacing: 10) {
-                            Image(systemName: "person.crop.circle.badge.plus").font(.system(size: 34)).foregroundStyle(.secondary)
-                            Text("No accounts yet").font(.headline)
-                            Text("Use + to connect an account.")
-                                .foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        }.frame(maxWidth: .infinity).padding(.vertical, 26)
-                    }
-                    if login.accountID != nil {
-                        loginSection
-                        Divider()
-                    }
-                    ForEach(Provider.allCases.filter { provider in monitor.entries.contains { $0.account.provider == provider } }) { provider in
-                        ProviderAccountGrid(entries: monitor.entries.filter { $0.account.provider == provider }) { entry in
-                            accountSection(entry)
+        NavigationSplitView {
+            VStack(spacing: 0) {
+                List(selection: $selectedProvider) {
+                    ForEach(Provider.allCases.filter { service in
+                        service.supportsRead || monitor.entries.contains { $0.account.provider == service }
+                    }) { service in
+                        HStack(spacing: 10) {
+                            ProviderIcon(provider: service).frame(width: 20, height: 20)
+                                .foregroundStyle(selectedProvider == service ? Color.white : Color(nsColor: .labelColor))
+                            Text(service.title).lineLimit(1)
+                                .foregroundStyle(selectedProvider == service ? Color.white : Color(nsColor: .labelColor))
+                            Spacer(minLength: 0)
+                            let count = monitor.entries.filter { $0.account.provider == service }.count
+                            if count > 0 {
+                                Text("\(count)").font(.caption.monospacedDigit())
+                                    .foregroundStyle(selectedProvider == service ? Color.white.opacity(0.8) : Color(nsColor: .secondaryLabelColor))
+                            }
                         }
-                        Divider()
+                        .padding(.vertical, 3)
+                        .tag(service)
+                        .accessibilityIdentifier("service-\(service.rawValue)")
                     }
-                    if let message = error ?? login.error {
-                        UsageWarning(message: message)
-                    }
-                }.padding(18)
+                }
+                .listStyle(.sidebar)
+                .navigationTitle("Headroom")
+                Divider()
+                HStack {
+                    Button("Refresh all", systemImage: "arrow.clockwise") {
+                        Task { for entry in monitor.entries { await monitor.refresh(entry.id) } }
+                    }.disabled(demo || login.accountID != nil || monitor.entries.isEmpty || monitor.entries.contains(where: \.refreshing))
+                    Spacer()
+                }.buttonStyle(.borderless).padding(14)
             }
-            Divider()
-            HStack {
-                Button("Refresh all", systemImage: "arrow.clockwise") {
-                    Task { for entry in monitor.entries { await monitor.refresh(entry.id) } }
-                }.disabled(demo || login.accountID != nil || monitor.entries.isEmpty || monitor.entries.contains(where: \.refreshing))
-                Spacer()
-                Text("Auto: 1 minute").font(.caption).foregroundStyle(.secondary)
-                Button("Quit") { login.cancel(); NSApplication.shared.terminate(nil) }
-            }.buttonStyle(.borderless).padding(12)
+            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
+        } detail: {
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    ProviderIcon(provider: provider).frame(width: 36, height: 36)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(provider.title).font(.title2.weight(.semibold))
+                        Text("\(accounts.count) \(accounts.count == 1 ? "account" : "accounts") · Checks every \(provider == .claude ? "5 minutes" : "minute")")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Add account", systemImage: "plus") { addProvider(provider) }
+                        .disabled(demo || login.accountID != nil || !provider.supportsRead)
+                        .accessibilityIdentifier("addAccount")
+                }.padding(24)
+                Form {
+                    if demo { Label("Demo data", systemImage: "testtube.2").foregroundStyle(.orange) }
+                    if login.accountID != nil { Section { loginSection } }
+                    if accounts.isEmpty {
+                        ContentUnavailableView {
+                            Label("No \(provider.title) accounts", systemImage: "person.crop.circle.badge.plus")
+                        } description: {
+                            Text("Add an account to see its usage here.")
+                        } actions: {
+                            Button("Add account") { addProvider(provider) }
+                                .disabled(demo || login.accountID != nil || !provider.supportsRead)
+                        }
+                    }
+                    ForEach(accounts) { entry in
+                        Section { accountSection(entry) }
+                    }
+                    if let message = error ?? login.error { UsageWarning(message: message) }
+                }.formStyle(.grouped)
+            }
         }
-        .frame(minWidth: 340, minHeight: 440)
+        .frame(minWidth: 740, minHeight: 480)
         .alert("Remove this account?", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } })) {
             Button("Cancel", role: .cancel) { removal = nil }
             Button("Remove", role: .destructive) {
@@ -79,28 +94,19 @@ struct MonitorView: View {
                 removal = nil
             }
         } message: { Text("Removes this app's saved account and credentials. Other logins are not affected.") }
-        .onChange(of: login.accountID) { _, _ in code = "" }
-    }
-
-    private var addAccountMenu: some View {
-        Menu {
-            ForEach(Provider.allCases.filter(\.supportsRead)) { provider in
-                Button(provider.title) { addProvider(provider) }
-            }
-        } label: {
-            Image(systemName: "plus").font(.title3.weight(.medium)).frame(width: 28, height: 28)
+        .onAppear { if selectedProvider == nil { selectedProvider = provider } }
+        .onChange(of: login.accountID) { _, id in
+            code = ""
+            if id != nil { selectedProvider = login.provider }
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden)
-        .help("Connect another service").accessibilityLabel("Connect another service")
-        .disabled(login.accountID != nil).accessibilityIdentifier("addAccount")
     }
 
     private func accountSection(_ entry: AccountEntry) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            AccountSummaryView(entry: entry, compact: true)
+        VStack(alignment: .leading, spacing: 16) {
+            AccountSummaryView(entry: entry)
             HStack {
                 Button("Refresh") { Task { await monitor.refresh(entry.id) } }
-                    .buttonStyle(.borderless).disabled(demo || entry.refreshing || entry.resetting || login.accountID != nil)
+                    .disabled(demo || entry.refreshing || entry.resetting || login.accountID != nil)
                 Spacer()
                 Menu {
                     Button("Reconnect…") { reconnect(entry.account) }
@@ -132,7 +138,7 @@ struct MonitorView: View {
                 }
             }
         }
-        .font(.system(size: 12)).padding(.vertical, 4)
+        .font(.body).padding(.vertical, 8)
     }
 
     private var loginSection: some View {
