@@ -21,8 +21,10 @@ struct AccountSummaryView: View {
                     Text(entry.displayName).font(.system(size: 12, weight: .semibold))
                         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                     HStack {
-                        Text(entry.snapshot?.plan ?? "Plan unavailable").font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        if let plan = entry.snapshot?.plan {
+                            Text(plan).font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         if entry.refreshing { ProgressView().controlSize(.mini) }
                     }
                 }
@@ -32,8 +34,10 @@ struct AccountSummaryView: View {
                         .help(entry.displayName)
                     Spacer(minLength: 4)
                     VStack(alignment: .trailing, spacing: 3) {
-                        Text(entry.snapshot?.plan ?? "Plan unavailable").font(.caption).foregroundStyle(.secondary)
-                            .lineLimit(1).help(entry.snapshot?.plan ?? "The provider did not report a plan")
+                        if let plan = entry.snapshot?.plan {
+                            Text(plan).font(.caption).foregroundStyle(.secondary)
+                                .lineLimit(1).help(plan)
+                        }
                         if entry.refreshing { ProgressView().controlSize(.small) }
                     }
                 }
@@ -50,7 +54,7 @@ struct AccountSummaryView: View {
                     !["Credits left", "Credits used", "Credit limit", "Individual credit quota"].contains($0.title)
                         || creditLeft == nil || creditCap == nil
                 }
-                let rows = ForEach(Array(displayedMetrics.enumerated()), id: \.offset) { _, metric in
+                let rows = ForEach(Array(displayedMetrics.filter { $0.kind != .note }.enumerated()), id: \.offset) { _, metric in
                     metricRow(metric)
                 }
                 if compact {
@@ -60,6 +64,11 @@ struct AccountSummaryView: View {
                               alignment: .leading, spacing: 18) {
                         rows
                     }
+                }
+                ForEach(Array(displayedMetrics.filter { $0.kind == .note }.enumerated()), id: \.offset) { _, metric in
+                    Text("\(metric.title): \(metric.detail ?? "Unavailable")")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if entry.account.provider == .codex {
                     Divider()
@@ -95,14 +104,25 @@ struct AccountSummaryView: View {
             } else if let message = entry.error {
                 UsageWarning(message: message)
             } else {
-                Text(entry.refreshing ? "Checking usage…" : "Connect to see usage.")
+                Text(!entry.account.provider.supportsRead ? "Usage unavailable."
+                     : entry.refreshing ? "Checking usage…" : "Connect to see usage.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private func metricRow(_ metric: UsageMetric) -> some View {
-        if metric.kind == .quota {
+        if !compact, metric.kind == .spend,
+           [.anthropicAPI, .openAIAPI].contains(entry.account.provider) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(metric.title).font(.callout).foregroundStyle(.secondary)
+                Text(formatted(metric)).font(.system(size: 28, weight: .semibold).monospacedDigit())
+                if let detail = metric.detail {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        } else if metric.kind == .quota {
             VStack(alignment: .leading, spacing: 5) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 6) {
@@ -239,7 +259,7 @@ extension Provider {
         case .anthropicAPI: name = "anthropic-logo"
         case .xaiAPI: name = "xai-logo"
         case .grok: name = "grok-logo"
-        case .cursor: name = "cursor-logo"
+        case .cursor: name = "grok-bot-logo"
         case .zai: name = "zai-logo"
         case .searchAPI: name = "searchapi-logo"
         case .dataForSEO: name = "dataforseo-logo"

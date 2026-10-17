@@ -37,10 +37,43 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(identified.displayName == "alice@example.test")
 }
 
+@Test @MainActor func anthropicBillingRejectionExplainsTheRequiredKeyAndPausesChecks() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let account = Account(label: "", provider: .anthropicAPI)
+    try store.save([account])
+    let monitor = try Monitor(store: store, fetch: { _ in throw MonitorError.http(401) })
+    await monitor.refresh(account.id)
+    #expect(monitor.entries[0].error?.contains("Admin key") == true)
+    #expect(monitor.entries[0].error?.contains("sk-ant-admin") == true)
+    #expect(monitor.nextAutomaticRefresh == nil)
+    #expect(monitor.entries[0].snapshot == nil)
+}
+
 @Test @MainActor func everyProviderHasABundledLogoInsteadOfALetterFallback() {
     for provider in Provider.allCases {
         #expect(provider.logo != nil, "Missing logo for \(provider.title)")
     }
+}
+
+@Test @MainActor func retiredExaAccountsStayReadableButNeverPoll() async throws {
+    let store = try temporaryStore()
+    defer { try? FileManager.default.removeItem(at: store.root) }
+    let id = UUID()
+    let account = try JSONDecoder().decode(Account.self, from: response("{\"id\":\"\(id)\",\"label\":\"Saved Exa\",\"provider\":\"exa\"}"))
+    try store.save([account])
+    let service = PollFixture()
+    let monitor = try Monitor(store: store, fetch: { try await service.fetch($0) })
+    #expect(!Provider.exa.supportsRead)
+    #expect(!LocalCredentialDiscovery.supports(.exa))
+    #expect(LocalCredentialDiscovery.scan(environment: ["EXA_SERVICE_KEY": "fixture-service",
+        "EXA_API_KEY_ID": "fixture-id", "EXA_API_KEY": "fixture-search"]).candidates.isEmpty)
+    await monitor.refresh(id)
+    await monitor.refreshDue()
+    #expect(await service.count(id) == 0)
+    #expect(monitor.nextAutomaticRefresh == nil)
+    #expect(monitor.entries.map(\.account) == [account])
+    #expect(try store.load() == [account])
 }
 
 @Test func enteredKeysStayOutOfMetadataAndSeparateAcrossAccounts() throws {

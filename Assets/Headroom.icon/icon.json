@@ -1,0 +1,10 @@
+{
+  "fill": {"solid": "srgb:0.06,0.06,0.06,1"},
+  "groups": [{
+    "layers": [{"image-name": "background.png", "name": "Headroom", "glass": false}],
+    "lighting": "individual",
+    "specular": false,
+    "shadow": {"kind": "neutral", "opacity": 0}
+  }],
+  "supported-platforms": {"square": "shared"}
+}

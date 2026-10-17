@@ -8,6 +8,20 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     })
 }
 
+@Test func ampUnrecognizedCLIOutputFallsBackToSelectedTokenHTTP() async throws {
+    let client = AdditionalClient(http: ProviderHTTP { request in
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer selected-fallback")
+        let panel = request.url?.path.contains("/remote/") == true
+        let body = Data(#"{"ok":true,"result":{"displayText":"Individual credits: $41.23 remaining"}}"#.utf8)
+        return (panel ? Data() : body, HTTPURLResponse(url: request.url!, statusCode: panel ? 403 : 200, httpVersion: nil, headerFields: nil)!)
+    }, ampUsage: { token in
+        #expect(token == "selected-fallback")
+        return "new unrecognized CLI format"
+    })
+    let snapshot = try await client.fetch(.init(label: "", provider: .amp), secrets: .init(key: "selected-fallback"))
+    #expect(snapshot.metrics.first?.value == 41.23)
+}
+
 @Test func ampKeepsAgentDollarsOrbHoursAndCreditsSeparate() async throws {
     let client = AdditionalClient(http: additionalHTTP(#"""
     {"ok":true,"result":{"displayText":"Signed in as test@example.test (Fixture team)\nAmp Megawatt Tier: agent usage $18.57 of $20 remaining, orb usage 732.8h of 750h a1.small orb hours remaining - period 2026-09-13 to 2026-10-13\nIndividual credits: $31.25 remaining"}}
@@ -156,9 +170,12 @@ func ampSupplementalFailurePreservesCreditsWithoutInventingDashboardValues(_ mod
     ]
     for (balance, expected) in balances {
         let wallet = balance.isEmpty ? "" : ",\"prepaidBalance\":\(balance)"
-        let client = AdditionalClient(http: additionalHTTP("""
-        {"subscriptionTier":"SuperGrok","config":{"creditUsagePercent":6,"currentPeriod":{"start":"2026-10-01T00:00:00Z","end":"2026-11-01T00:00:00Z"}\(wallet)}}
-        """))
+        let client = AdditionalClient(http: ProviderHTTP { request in
+            let body = request.url?.path == "/v1/user" ? #"{"userId":"fixture-person"}"# : """
+            {"subscription_tier":"SuperGrok","config":{"creditUsagePercent":6,"currentPeriod":{"start":"2026-10-01T00:00:00Z","end":"2026-11-01T00:00:00Z"}\(wallet)}}
+            """
+            return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
         let result = try await client.fetch(Account(label: "", provider: .grok), secrets: .init(key: "fixture-grok"))
         #expect(result.metrics.filter { $0.kind == .quota }.count == 1)
         #expect(result.metrics.first?.value == 94)
@@ -221,7 +238,7 @@ func ampSupplementalFailurePreservesCreditsWithoutInventingDashboardValues(_ mod
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-management")
         let body: String
         if request.url?.path == "/auth/management-keys/validation" {
-            body = "{\"scope\":\"SCOPE_TEAM\",\"scopeId\":\"\(team)\"}"
+            body = "{\"scope\":\"SCOPE_TEAM\",\"scopeId\":\"\(team)\",\"name\":\"Headroom billing\"}"
         } else {
             #expect(request.url?.path == "/v1/billing/teams/\(team)/prepaid/balance")
             body = "{\"total\":{\"val\":\"-1446\"},\"changes\":[]}"
@@ -230,6 +247,11 @@ func ampSupplementalFailurePreservesCreditsWithoutInventingDashboardValues(_ mod
     }))
     let snapshot = try await client.fetch(Account(label: "", provider: .xaiAPI), secrets: .init(key: "fixture-management"))
     #expect(snapshot.identity?.organizationID == team)
+    #expect(snapshot.identity?.name == "Headroom billing")
+    #expect(Account(label: "", identity: snapshot.identity, provider: .xaiAPI).displayName == "Headroom billing")
+    let unnamed = Account(label: "", identity: .init(accountID: team, organizationID: team, email: ""), provider: .xaiAPI)
+    #expect(unnamed.displayName == "API team · 8bcdf4ce")
+    #expect(try JSONDecoder().decode(Account.self, from: JSONEncoder().encode(unnamed)).identity == unnamed.identity)
     #expect(snapshot.metrics == [.init(title: "Prepaid API balance", kind: .balance, value: 14.46, unit: "USD")])
     for body in ["{}", "{\"scope\":\"SCOPE_ORGANIZATION\",\"scopeId\":\"\(team)\"}",
                  "{\"scope\":\"SCOPE_TEAM\",\"scopeId\":\"../other\"}"] {

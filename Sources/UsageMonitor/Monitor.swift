@@ -69,7 +69,16 @@ final class Monitor {
         guard entries.contains(where: { $0.id == id }) else { return }
         guard entries.first(where: { $0.id == id })?.resetting != true else { throw MonitorError.loginBusy }
         try store.saveSecrets(secrets, for: id)
+        try setGrokHelper(id, enabled: false)
         beginLogin(id)
+    }
+
+    func setGrokHelper(_ id: UUID, enabled: Bool) throws {
+        guard let index = entries.firstIndex(where: { $0.id == id }), entries[index].account.provider == .grok else { return }
+        var accounts = entries.map(\.account)
+        accounts[index].options["grokAuth"] = enabled ? "helper" : nil
+        try store.save(accounts)
+        entries[index].account = accounts[index]
     }
 
     func rename(_ id: UUID, label: String) throws {
@@ -84,6 +93,15 @@ final class Monitor {
         guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
         var accounts = entries.map(\.account)
         accounts[index].showInMenuBar = visible
+        try store.save(accounts)
+        entries[index].account = accounts[index]
+    }
+
+    func setResetAlerts(_ id: UUID, enabled: Bool) throws {
+        guard let index = entries.firstIndex(where: { $0.id == id }),
+              [.claude, .codex].contains(entries[index].account.provider) else { return }
+        var accounts = entries.map(\.account)
+        accounts[index].options["resetAlerts"] = enabled ? "true" : nil
         try store.save(accounts)
         entries[index].account = accounts[index]
     }
@@ -162,7 +180,8 @@ final class Monitor {
     }
 
     func refresh(_ id: UUID) async {
-        guard let index = entries.firstIndex(where: { $0.id == id }), !entries[index].refreshing, !entries[index].resetting else { return }
+        guard let index = entries.firstIndex(where: { $0.id == id }), entries[index].account.provider.supportsRead,
+              !entries[index].refreshing, !entries[index].resetting else { return }
         if rateLimitEndsAt(id) != nil { return }
         let requestID = UUID()
         requests[id] = requestID
@@ -194,7 +213,11 @@ final class Monitor {
             guard requests[id] == requestID, let current = entries.firstIndex(where: { $0.id == id }) else { return }
             entries[current].snapshot = nil
             // Never surface network bodies, credentials, or helper output in errors.
-            entries[current].error = (error as? MonitorError)?.localizedDescription ?? "Could not save this account's state."
+            if entries[current].account.provider == .anthropicAPI, error as? MonitorError == .http(401) {
+                entries[current].error = "Anthropic rejected this key. Billing requires an organization Admin key (sk-ant-admin…), not a standard API key."
+            } else {
+                entries[current].error = (error as? MonitorError)?.localizedDescription ?? "Could not save this account's state."
+            }
             switch error as? MonitorError {
             case .signInRequired, .missingScope, .keychainUnavailable, .invalidProfile, .identityChanged,
                  .duplicateAccount, .http(401), .http(403), .unsupported:

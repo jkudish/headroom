@@ -30,6 +30,11 @@ struct Account: Codable, Identifiable, Equatable, Sendable {
     var displayName: String {
         if let email = identity?.email, !email.isEmpty, email != "Email unavailable" { return email }
         if provider == .openRouter { return options["mode"] == "key" ? "API key" : "Wallet" }
+        if provider == .xaiAPI, let identity {
+            if let name = identity.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { return name }
+            return "API team · \(identity.accountID.suffix(8))"
+        }
+        if provider == .anthropicAPI || provider == .openAIAPI { return "Organization spend" }
         if let id = identity?.accountID, !id.isEmpty { return id }
         return "New \(provider.title) account"
     }
@@ -214,6 +219,25 @@ struct UsageSnapshot: Sendable {
 
     func metrics(at now: Date) -> [UsageMetric] {
         fixedMetrics + [savedResets?.metric(at: now), cloudCredits?.metric(at: now)].compactMap { $0 }
+    }
+
+    func unusedResetExpirations(at now: Date) -> [(date: Date, count: Int)] {
+        if let savedResets, savedResets.eligible, savedResets.grants.count <= 200 {
+            return savedResets.grants.compactMap { grant in
+                let start = grant.startsAt.flatMap(ClaudeUsage.parseDate)
+                guard !grant.paused, (1...10000).contains(grant.resetsLeft),
+                      grant.resetsTotal.map({ $0 >= grant.resetsLeft }) ?? true,
+                      grant.startsAt == nil || start != nil,
+                      start.map({ $0 <= now }) ?? true,
+                      let end = grant.endsAt.flatMap(ClaudeUsage.parseDate), end > now else { return nil }
+                return (end, grant.resetsLeft)
+            }
+        }
+        return (resetCredits?.credits ?? []).compactMap { credit in
+            guard credit.status == "available", credit.resetType == "codex_rate_limits",
+                  let expiry = credit.expiresAt, expiry > now else { return nil }
+            return (expiry, 1)
+        }
     }
 
     var availabilityChangeDates: [Date] {

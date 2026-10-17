@@ -12,14 +12,9 @@ cp "$BIN/UsageMonitor" "$APP/Contents/MacOS/UsageMonitor"
 ditto "$BIN/UsageMonitor_UsageMonitor.bundle" "$APP/Contents/Resources/UsageMonitor_UsageMonitor.bundle"
 ICON_DIR="$(mktemp -d "${TMPDIR:-/tmp}/headroom-icon.XXXXXX")"
 trap 'rm -rf "$ICON_DIR"' EXIT
-ICONSET="$ICON_DIR/Headroom.iconset"
-mkdir "$ICONSET"
-for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" Sources/UsageMonitor/Resources/headroom-icon.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-    double=$((size * 2))
-    sips -z "$double" "$double" Sources/UsageMonitor/Resources/headroom-icon.png --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-done
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Headroom.icns"
+xcrun actool Assets/Headroom.icon --compile "$ICON_DIR" --platform macosx \
+    --minimum-deployment-target 14.0 --app-icon Headroom --output-partial-info-plist "$ICON_DIR/icon-info.plist"
+cp "$ICON_DIR/Headroom.icns" "$ICON_DIR/Assets.car" "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -29,6 +24,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Headroom</string>
 <key>CFBundleDisplayName</key><string>Headroom</string>
 <key>CFBundleIconFile</key><string>Headroom.icns</string>
+<key>CFBundleIconName</key><string>Headroom</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleShortVersionString</key><string>0.1</string>
 <key>LSUIElement</key><true/>

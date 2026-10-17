@@ -20,7 +20,7 @@ enum Provider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .xaiAPI: "xAI API"
         case .amp: "Amp"
         case .grok: "Grok / SuperGrok"
-        case .cursor: "Cursor Grok Bot"
+        case .cursor: "Grok Bot"
         case .serpAPI: "SerpAPI"
         case .tavily: "Tavily"
         case .jina: "Jina AI"
@@ -36,7 +36,7 @@ enum Provider: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 
     var usesHelper: Bool { self == .claude || self == .codex }
-    var supportsRead: Bool { ![Self.brave, .perplexity, .gemini, .kagi].contains(self) }
+    var supportsRead: Bool { ![Self.exa, .brave, .perplexity, .gemini, .kagi].contains(self) }
 
     var connectionHelp: String {
         switch self {
@@ -48,15 +48,15 @@ enum Provider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .dataForSEO: "Use the login and password from API Access, not your website password."
         case .firecrawl: "Use a team API key. Credits include purchases and coupons."
         case .openAIAPI: "Use an organization Admin key. Reports monthly API spend, not wallet balance."
-        case .anthropicAPI: "Use an organization sk-ant-admin key. Reports API spend, not Claude limits or wallet balance."
-        case .xaiAPI: "Use a team Management key with billing access. Reports prepaid API balance, not SuperGrok limits or promotional credits."
+        case .anthropicAPI: "Use an organization sk-ant-admin key, not a standard API key. Reports API spend, not Claude limits or wallet balance."
+        case .xaiAPI: "Use a team Management key with billing read access. Reports prepaid API balance, not SuperGrok limits or promotional credits."
         case .amp: "Use an Amp access token to see Agent, Orb and credit readings when available."
-        case .grok: "Use a SuperGrok OAuth token, not an xAI API key. Reports credits; no separate 5-hour meter. Renew tokens manually."
-        case .cursor: "Use a Cursor session Cookie header. Reports Grok Bot allowance, not SuperGrok."
+        case .grok: "Manual option: paste a SuperGrok access token, not an xAI API key. Manual tokens need renewal. Reports credits, not a separate 5-hour meter."
+        case .cursor: "Manual option: paste the session Cookie header from cursor.com. Grok Bot uses this sign-in service, separate from SuperGrok."
         case .serpAPI: "Use an API key to see remaining searches."
         case .tavily: "Use an API key to see plan credits and key usage."
         case .jina: "Use an API key to see token balance. Experimental connector."
-        case .exa: "Requires Team Management access, a service key and the API key ID to report. Shows key spend, not wallet balance."
+        case .exa: "Exa support is paused. Check usage in the Exa dashboard."
         case .parallel: "Use an Account API OAuth token, not a search key. Reports prepaid balance and pending charges."
         case .valyu: "Use a key with billing:read to see credits and pay-as-you-go spend."
         case .brave, .perplexity, .gemini, .kagi: "Billing is not supported. Check the dashboard."

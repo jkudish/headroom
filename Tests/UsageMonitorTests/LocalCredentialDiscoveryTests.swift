@@ -55,6 +55,18 @@ import Testing
         #expect(literal.candidates.first?.connectionSecrets()?.key == "literal$;# password")
     }
 
+    @Test func rejectedValuesIdentifyTheirSourceWithoutExposingValues() {
+        let result = LocalCredentialDiscovery.scan(environment: ["SEARCHAPI_API_KEY": ""],
+                                                   dotenv: "SEARCHAPI_API_KEY=$PRIVATE_VALUE")
+        #expect(result.candidates.isEmpty)
+        #expect(result.issues.count == 2)
+        let messages = result.issues.map(\.message)
+        #expect(messages[0].contains("App environment"))
+        #expect(messages[1].contains("Dotenv file"))
+        #expect(messages[0] != messages[1])
+        #expect(!messages.joined().contains("PRIVATE_VALUE"))
+    }
+
     @Test func billingCredentialTypesAndProviderIsolation() throws {
         let environment = [
             "OPENROUTER_API_KEY": "fixture-router", "OPENROUTER_MANAGEMENT_KEY": "fixture-wallet",
@@ -68,17 +80,15 @@ import Testing
             "VALYU_API_KEY": "fixture-valyu", "AMP_ACCESS_TOKEN": "fixture-ignore", "BRAVE_API_KEY": "fixture-ignore"
         ]
         let result = LocalCredentialDiscovery.scan(environment: environment)
-        #expect(result.candidates.count == 15)
-        for name in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "EXA_API_KEY", "PARALLEL_API_KEY"] {
+        #expect(result.candidates.count == 13)
+        for name in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "PARALLEL_API_KEY"] {
             let candidate = try #require(result.candidates.first { $0.variable == name })
             #expect(candidate.eligibility == .unsupportedCredentialType)
             #expect(candidate.connectionSecrets() == nil)
         }
         let admin = try #require(result.candidates.first { $0.variable == "OPENAI_ADMIN_KEY" })
         #expect(admin.optionHints == ["organizationID": "org-fixture"])
-        let exa = try #require(result.candidates.first { $0.variable == "EXA_SERVICE_KEY" })
-        #expect(exa.optionHints == ["keyID": "fixture-selected-id"])
-        #expect(exa.connectionSecrets()?.key == "fixture-exa-service")
+        #expect(!result.candidates.contains { $0.provider == .exa })
         for (name, mode) in [("OPENROUTER_API_KEY", "key"), ("OPENROUTER_MANAGEMENT_KEY", "wallet")] {
             #expect(result.candidates.first { $0.variable == name }?.optionHints == ["mode": mode])
         }
@@ -146,7 +156,7 @@ import Testing
 
     @Test func discoveryCatalogMatchesOnlyRequestedProviders() {
         let supported: Set<Provider> = [.openRouter, .searchAPI, .dataForSEO, .firecrawl, .openAIAPI,
-            .anthropicAPI, .xaiAPI, .serpAPI, .tavily, .jina, .exa, .parallel, .valyu, .you]
+            .anthropicAPI, .xaiAPI, .serpAPI, .tavily, .jina, .parallel, .valyu, .you]
         #expect(Set(Provider.allCases.filter(LocalCredentialDiscovery.supports)) == supported)
     }
 
@@ -169,7 +179,7 @@ import Testing
         for value in [valid + "x", "\u{0}", "fixture\nsecond", " \t "] {
             let result = LocalCredentialDiscovery.scan(environment: ["SEARCHAPI_API_KEY": value])
             #expect(result.candidates.isEmpty)
-            #expect(result.issues == [.rejectedAssignments(1)])
+            #expect(result.issues == [.rejectedEnvironmentValues(1)])
         }
         let lines = Array(repeating: "#", count: LocalCredentialDiscovery.maximumLines - 1).joined(separator: "\n")
         #expect(LocalCredentialDiscovery.scan(environment: [:], dotenv: lines + "\nSEARCHAPI_API_KEY=fixture").candidates.count == 1)

@@ -26,6 +26,7 @@ enum LocalCredentialDiscovery {
     enum Issue: Equatable, Sendable {
         case fileUnavailable, fileTooLarge, tooManyLines, invalidUTF8, ambiguousSyntax
         case rejectedAssignments(Int)
+        case rejectedEnvironmentValues(Int)
 
         var message: String {
             switch self {
@@ -34,7 +35,8 @@ enum LocalCredentialDiscovery {
             case .tooManyLines: "File exceeds 4096 lines."
             case .invalidUTF8: "File must use UTF-8."
             case .ambiguousSyntax: "Shell or multiline syntax found. No file keys loaded."
-            case .rejectedAssignments(let count): "Skipped \(count) unsafe, empty, or oversized assignments."
+            case .rejectedAssignments(let count): "Dotenv file: skipped \(count) entries. Values must be plain text, nonempty and at most 4096 bytes."
+            case .rejectedEnvironmentValues(let count): "App environment: skipped \(count) empty, oversized or invalid values."
             }
         }
     }
@@ -135,7 +137,7 @@ enum LocalCredentialDiscovery {
     }
 
     static func supports(_ provider: Provider) -> Bool {
-        provider == .dataForSEO || rules.contains { $0.provider == provider }
+        provider.supportsRead && (provider == .dataForSEO || rules.contains { $0.provider == provider })
     }
 
     /// Environment candidates come first, but do not overwrite file candidates.
@@ -150,7 +152,7 @@ enum LocalCredentialDiscovery {
             // Already sourced values are literal data; never parse shell syntax here.
             if validValue(value) { inherited[name] = value } else { rejected += 1 }
         }
-        if rejected > 0 { issues.append(.rejectedAssignments(rejected)) }
+        if rejected > 0 { issues.append(.rejectedEnvironmentValues(rejected)) }
         var candidates = candidates(in: inherited, source: .inheritedEnvironment)
         if let dotenv {
             let parsed = parse(dotenv)
@@ -200,7 +202,7 @@ enum LocalCredentialDiscovery {
 
     private static func candidates(in values: [String: String], source: Source) -> [Candidate] {
         var result: [Candidate] = []
-        for rule in rules {
+        for rule in rules where rule.provider.supportsRead {
             for name in rule.names {
                 guard let key = values[name] else { continue }
                 let companions = rule.provider == .openAIAPI ? organizations : rule.provider == .exa ? exaIDs : []

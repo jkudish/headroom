@@ -82,7 +82,7 @@ struct BillingClient: Sendable {
 
     private var walletUnavailable: UsageMetric {
         .init(title: "Wallet balance", kind: .note, value: nil, unit: "USD",
-              detail: "Unavailable from this API. Spend is not a wallet balance.")
+              detail: "Not available through this API.")
     }
 
     private func costs(_ account: Account, secrets: ConnectionSecrets, now: Date) async throws -> UsageSnapshot {
@@ -139,9 +139,13 @@ struct BillingClient: Sendable {
             }
         } while page != nil
         let value = NSDecimalNumber(decimal: total).doubleValue
+        let month = DateFormatter()
+        month.locale = .current
+        month.timeZone = TimeZone(secondsFromGMT: 0)
+        month.setLocalizedDateFormatFromTemplate("MMMM yyyy")
         return UsageSnapshot(metrics: [
             .init(title: "Month-to-date spend", kind: .spend, value: available && value.isFinite ? value : nil,
-                  unit: currency ?? "USD", detail: "Current UTC month through \(formatter.string(from: now)); provider reporting may lag"),
+                  unit: currency ?? "USD", detail: "\(month.string(from: now)) · UTC · Reporting may lag"),
             walletUnavailable
         ], fetchedAt: now)
     }

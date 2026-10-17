@@ -18,11 +18,12 @@ final class LoginController {
     func start(_ id: UUID, provider: Provider = .claude, store: AccountStore,
                completion: @escaping @MainActor (UUID) -> Void) throws {
         guard process == nil else { throw MonitorError.loginBusy }
-        guard provider.usesHelper else { throw MonitorError.invalidProfile }
-        let helper = provider == .codex ? "codex" : "claude"
+        guard provider.usesHelper || provider == .grok else { throw MonitorError.invalidProfile }
+        let helper = provider == .grok ? "grok" : provider == .codex ? "codex" : "claude"
         let paths = [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/\(helper)").path,
                      "/opt/homebrew/bin/\(helper)", "/usr/local/bin/\(helper)"]
-        guard let executable = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+        let executable = provider == .grok ? try GrokAuth.executable().path : paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+        guard let executable else {
             throw MonitorError.unsupported("Install \(provider.title)'s official CLI at ~/.local/bin/\(helper) or with Homebrew.")
         }
         let process = Process()
@@ -30,8 +31,8 @@ final class LoginController {
         let output = Pipe()
         let attempt = UUID()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = provider == .codex ? CodexAuth.loginArguments : ["auth", "login", "--claudeai"]
-        process.environment = try provider == .codex ? CodexAuth.environment(id, store: store) : store.helperEnvironment(id)
+        process.arguments = provider == .grok ? ["login", "--oauth"] : provider == .codex ? CodexAuth.loginArguments : ["auth", "login", "--claudeai"]
+        process.environment = try provider == .grok ? GrokAuth.environment(id, store: store) : provider == .codex ? CodexAuth.environment(id, store: store) : store.helperEnvironment(id)
         process.currentDirectoryURL = store.profile(id)
         process.standardInput = input
         process.standardOutput = output
@@ -121,6 +122,20 @@ struct LoginPrompt {
                   let marker = buffer.range(of: "Enter this one-time code"),
                   let code = buffer[marker.upperBound...].range(of: #"\b[A-Z0-9]{4}-[A-Z0-9]{5}\b"#, options: .regularExpression) else { return nil }
             return Self(url: URL(string: "https://auth.openai.com/codex/device")!, deviceCode: String(buffer[code]))
+        }
+        if provider == .grok {
+            guard let range = buffer.range(of: #"https://auth\.x\.ai/oauth2/authorize\?[^\s\x{1B}]+(?=\r?\n)"#, options: .regularExpression),
+                  let url = URL(string: String(buffer[range])),
+                  let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  parts.host == "auth.x.ai", parts.user == nil, parts.password == nil, parts.port == nil,
+                  let items = parts.queryItems, Set(items.map(\.name)).count == items.count,
+                  items.first(where: { $0.name == "response_type" })?.value == "code",
+                  items.first(where: { $0.name == "code_challenge_method" })?.value == "S256",
+                  ["state", "nonce", "code_challenge", "client_id"].allSatisfy({ name in items.contains(where: { $0.name == name && $0.value?.isEmpty == false }) }),
+                  let callback = items.first(where: { $0.name == "redirect_uri" })?.value.flatMap(URLComponents.init(string:)),
+                  callback.scheme == "http", callback.host == "127.0.0.1", callback.port != nil,
+                  callback.path == "/callback", callback.user == nil, callback.password == nil else { return nil }
+            return Self(url: url, deviceCode: nil)
         }
         guard provider == .claude else { return nil }
         // Keep the helper's full PKCE URL. Never log or persist output or codes.

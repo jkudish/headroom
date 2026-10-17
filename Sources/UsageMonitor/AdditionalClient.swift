@@ -2,6 +2,7 @@ import Foundation
 
 struct AdditionalClient: Sendable {
     var http: ProviderHTTP = ProviderHTTP()
+    var ampUsage: (@Sendable (String) async throws -> String)? = nil
 
     func fetch(_ account: Account, secrets: ConnectionSecrets) async throws -> UsageSnapshot {
         guard !secrets.key.isEmpty,
@@ -19,7 +20,9 @@ struct AdditionalClient: Sendable {
                   amount.range(of: #"^-?[0-9]+$"#, options: .regularExpression) != nil,
                   let cents = Double(amount), cents.isFinite else { throw MonitorError.invalidResponse }
             // xAI's ledger counts purchases as negative and spending as positive.
-            return UsageSnapshot(identity: .init(accountID: team, organizationID: team, email: ""),
+            let name = (fields["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let keyName = name.flatMap { !$0.isEmpty && $0.utf8.count <= 256 && !$0.contains(where: { $0.isNewline }) ? $0 : nil }
+            return UsageSnapshot(identity: .init(accountID: team, organizationID: team, email: "", name: keyName),
                                  metrics: [.init(title: "Prepaid API balance", kind: .balance, value: -cents / 100, unit: "USD")])
         }
         if account.provider == .jina {
@@ -32,10 +35,16 @@ struct AdditionalClient: Sendable {
             return UsageSnapshot(metrics: [.init(title: "Tokens remaining", kind: .count, value: amount, unit: "tokens")])
         }
         let data: Data
+        var usedAmpCLI = false
         switch account.provider {
         case .amp:
-            data = try await request("https://ampcode.com/api/internal?userDisplayBalanceInfo", secrets: secrets,
-                                     method: "POST", body: Data(#"{"method":"userDisplayBalanceInfo","params":{}}"#.utf8))
+            if let ampUsage, let text = try? await ampUsage(secrets.key) {
+                data = try JSONSerialization.data(withJSONObject: ["ok": true, "result": ["displayText": text]])
+                usedAmpCLI = true
+            } else {
+                data = try await request("https://ampcode.com/api/internal?userDisplayBalanceInfo", secrets: secrets,
+                                         method: "POST", body: Data(#"{"method":"userDisplayBalanceInfo","params":{}}"#.utf8))
+            }
         case .grok:
             guard !secrets.key.hasPrefix("xai-"), !secrets.key.contains("=") else {
                 throw MonitorError.unsupported("Use a SuperGrok OAuth access token, not an xAI developer key or cookie.")
@@ -111,7 +120,10 @@ struct AdditionalClient: Sendable {
                     metrics.append(.init(title: parts[0], kind: .balance, value: balance, unit: "USD"))
                 }
             }
-            if metrics.isEmpty { throw MonitorError.invalidResponse }
+            if metrics.isEmpty {
+                if usedAmpCLI { return try await AdditionalClient(http: http).fetch(account, secrets: secrets) }
+                throw MonitorError.invalidResponse
+            }
             if !metrics.contains(where: { $0.title == "Agent" }) { metrics.append(.init(title: "Agent allowance", kind: .note, value: nil, detail: "Not reported by this plan")) }
             if !metrics.contains(where: { $0.title == "Orb" }) { metrics.append(.init(title: "Orb usage", kind: .note, value: nil, detail: "Unavailable — not returned by Amp")) }
             // Amp's own Account panel has separate subscription buckets. The CLI's
@@ -126,15 +138,7 @@ struct AdditionalClient: Sendable {
                 }
             }
         case .grok:
-            guard let config = root["config"] as? [String: Any] else { throw MonitorError.invalidResponse }
-            let period = config["currentPeriod"] as? [String: Any] ?? [:]
-            let used = number(config["creditUsagePercent"])
-            let remaining = used.flatMap { (0...100).contains($0) ? 100 - $0 : nil }
-            guard remaining != nil || config["prepaidBalance"] != nil else { throw MonitorError.invalidResponse }
-            metrics = [.init(title: "Credit period", kind: .quota, value: remaining,
-                             resetsAt: date(period["end"] ?? config["billingPeriodEnd"])),
-                       .init(title: "Prepaid credits", kind: .balance,
-                             value: grokPrepaidUSD(config["prepaidBalance"]), unit: "USD")]
+            return try await grokSnapshot(data, identity: GrokClient.identity(token: secrets.key, http: http))
         case .cursor:
             guard let used = number(root["usagePercent"]), (0...100).contains(used) else { throw MonitorError.invalidResponse }
             let paid = (root["includedLimitZero"] as? Bool).map { !$0 } ?? (root["hasNonZeroIncludedLimit"] as? Bool ?? false)
@@ -190,6 +194,18 @@ struct AdditionalClient: Sendable {
         default: throw MonitorError.invalidResponse
         }
         return UsageSnapshot(identity: identity, metrics: metrics, plan: plan, reportedEmail: reportedEmail)
+    }
+
+    func grokSnapshot(_ data: Data, identity: AccountIdentity? = nil) throws -> UsageSnapshot {
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], root["error"] == nil,
+              let config = root["config"] as? [String: Any] else { throw MonitorError.invalidResponse }
+        let period = config["currentPeriod"] as? [String: Any] ?? [:]
+        let remaining = number(config["creditUsagePercent"]).flatMap { (0...100).contains($0) ? 100 - $0 : nil }
+        guard remaining != nil || config["prepaidBalance"] != nil else { throw MonitorError.invalidResponse }
+        return UsageSnapshot(identity: identity, metrics: [
+            .init(title: "Credit period", kind: .quota, value: remaining, resetsAt: date(period["end"] ?? config["billingPeriodEnd"])),
+            .init(title: "Prepaid credits", kind: .balance, value: grokPrepaidUSD(config["prepaidBalance"]), unit: "USD")
+        ], plan: root["subscription_tier"] as? String)
     }
 
     private func ampDashboard(_ data: Data) throws -> UsageSnapshot {

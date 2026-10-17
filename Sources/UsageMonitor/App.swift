@@ -5,6 +5,10 @@ import SwiftUI
 @main
 enum UsageMonitorApp {
     @MainActor static func main() {
+        if CommandLine.arguments.contains("--mcp") {
+            LocalMCP.serve(root: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/UsageMonitorPoC"))
+            return
+        }
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
         let delegate = AppDelegate()
@@ -25,6 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var connectionWindow: NSWindow?
     private var monitor: Monitor?
     private let login = LoginController()
+    private lazy var resetNotifications = ResetNotificationController()
+    private var localFeatureTimer: Timer?
     private var demoRoot: URL?
     private let demo = CommandLine.arguments.contains("--demo")
 
@@ -50,6 +56,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 monitor = try Monitor(store: store, fetch: { try await Self.fetch($0, store: store) })
             }
             guard let monitor else { return }
+            if !demo {
+                resetNotifications.openAccount = { [weak self] id in
+                    guard let self, let monitor = self.monitor,
+                          let account = monitor.entries.first(where: { $0.id == id })?.account else { return }
+                    self.openWindow()
+                    var content = self.view(monitor)
+                    content.initialProvider = account.provider
+                    self.window?.contentView = NSHostingView(rootView: content)
+                }
+                let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+                    Task { @MainActor in self?.updateStatusItem(); self?.updateLocalFeatures() }
+                }
+                localFeatureTimer = timer
+                RunLoop.main.add(timer, forMode: .common)
+            }
             observeAccounts()
             if CommandLine.arguments.contains("--window") || demo || monitor.entries.isEmpty { openWindow() }
             Task { for entry in monitor.entries { await monitor.refresh(entry.id) } }
@@ -66,11 +87,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         MonitorView(monitor: monitor, login: login, demo: demo,
                     openWindow: { [weak self] in self?.openWindow() },
                     connect: { [weak self] provider, account in self?.openConnection(provider, account: account) },
-                    showResets: { [weak self] account in self?.openResetDetails(account) })
+                    showResets: { [weak self] account in self?.openResetDetails(account) },
+                    showAgentAccess: { [weak self] in self?.openAgentAccess() },
+                    setResetAlerts: { [weak self] id, enabled in
+                        guard let self, !self.demo else { return }
+                        if enabled, try await !self.resetNotifications.requestPermission() {
+                            throw MonitorError.unsupported("Allow Headroom in System Settings → Notifications, then try again.")
+                        }
+                        try monitor.setResetAlerts(id, enabled: enabled)
+                    })
+    }
+
+    private func openAgentAccess() {
+        guard let monitor, connectionWindow == nil else { return }
+        openWindow()
+        presentSheet("Local agent access", content: LocalAgentAccessView(enabled: UserDefaults.standard.bool(forKey: "localMCPEnabled"),
+            setEnabled: { enabled in
+                guard !self.demo else { return }
+                try LocalMCP.write(monitor.entries, root: monitor.store.root, enabled: enabled)
+                UserDefaults.standard.set(enabled, forKey: "localMCPEnabled")
+            }, finish: { [weak self] in self?.closeSheet() }))
+    }
+
+    private func updateLocalFeatures() {
+        guard !demo, let monitor else { return }
+        resetNotifications.update(monitor.entries)
+        try? LocalMCP.write(monitor.entries, root: monitor.store.root, enabled: UserDefaults.standard.bool(forKey: "localMCPEnabled"))
     }
 
     private func openConnection(_ provider: Provider, account: Account?) {
-        guard let monitor, !monitor.entries.contains(where: \.resetting) else { return }
+        guard provider.supportsRead, let monitor, !monitor.entries.contains(where: \.resetting) else { return }
         openWindow()
         if provider.usesHelper {
             guard !demo, login.accountID == nil else { return }
@@ -89,10 +135,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             return
         }
         guard connectionWindow == nil else { return }
-        let form = ConnectionView(monitor: monitor, provider: provider, account: account, demo: demo) { [weak self] in
+        let form = ConnectionView(monitor: monitor, provider: provider, account: account, demo: demo, finish: { [weak self] in
             self?.closeSheet()
-        }
+        }, browserSignIn: [.grok, .cursor].contains(provider) ? { [weak self] in
+            self?.closeSheet()
+            self?.openBrowserSignIn(provider, account: account)
+        } : nil)
         presentSheet(provider.title, content: form)
+    }
+
+    private func openBrowserSignIn(_ provider: Provider, account: Account?) {
+        guard !demo, let monitor, login.accountID == nil, connectionWindow == nil else { return }
+        guard !monitor.entries.contains(where: { $0.resetting || ($0.id == account?.id && $0.refreshing) }) else {
+            showSignInError(MonitorError.loginBusy)
+            return
+        }
+        if provider == .grok {
+            do {
+                _ = try GrokAuth.executable()
+                let id = try account?.id ?? monitor.add(label: "", provider: .grok)
+                try login.start(id, provider: .grok, store: monitor.store) { [weak self] id in
+                    do {
+                        try monitor.setGrokHelper(id, enabled: true)
+                        Task { await monitor.refresh(id) }
+                    } catch { self?.showSignInError(error) }
+                }
+                monitor.beginLogin(id)
+            } catch { showSignInError(error) }
+        } else if provider == .cursor {
+            presentSheet("Grok Bot sign-in", content: GrokBotSignInView(save: { secrets, identity in
+                if let owner = account?.identity, !owner.matches(identity) { throw MonitorError.identityChanged }
+                guard !monitor.entries.contains(where: { $0.account.provider == .cursor && $0.id != account?.id && $0.account.identity?.matches(identity) == true }) else {
+                    throw MonitorError.duplicateAccount
+                }
+                let id: UUID
+                if let account { try monitor.reconnect(account.id, secrets: secrets); id = account.id }
+                else { id = try monitor.add(label: "", provider: .cursor, secrets: secrets) }
+                Task { await monitor.refresh(id) }
+            }, finish: { [weak self] in self?.closeSheet() }))
+        }
+    }
+
+    private func showSignInError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Could not complete sign-in"
+        alert.informativeText = (error as? MonitorError)?.localizedDescription ?? "Could not save the account."
+        if let window { alert.beginSheetModal(for: window) }
     }
 
     private func openResetDetails(_ account: Account) {
@@ -125,12 +213,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let account = try store.load().first(where: { $0.id == id }) else { throw MonitorError.signInRequired }
         if account.provider == .claude { return try await ClaudeClient(store: store).fetch(id) }
         if account.provider == .codex { return try await CodexClient(store: store).fetch(id) }
+        if account.provider == .grok, account.options["grokAuth"] == "helper" { return try await GrokClient(store: store).fetch(id) }
         let secrets = try store.secrets(id)
         switch account.provider {
+        case .cursor: return try await GrokBotClient().fetch(account, secrets: secrets)
         case .zai: return try await ZaiClient().fetch(account, secrets: secrets)
         case .openRouter, .searchAPI, .dataForSEO, .firecrawl, .openAIAPI, .anthropicAPI:
             return try await BillingClient().fetch(account, secrets: secrets)
-        default: return try await AdditionalClient().fetch(account, secrets: secrets)
+        default:
+            return try await AdditionalClient(ampUsage: { token in
+                try await AmpCLI.usage(token, id: id, store: store)
+            }).fetch(account, secrets: secrets)
         }
     }
 
@@ -138,6 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         withObservationTracking {
             updateStatusItem()
             scheduleAutomaticRefresh()
+            updateLocalFeatures()
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeAccounts() }
         }
@@ -192,7 +286,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let readings = entry.menuBarMetrics.map { "\($0.title): \(MenuBarAccountImage.text($0, provider: entry.account.provider))" }.joined(separator: ", ")
             return "\(entry.account.provider.title) — \(entry.displayName): \(readings.isEmpty ? entry.error ?? "Usage unavailable" : readings)"
         }
-        let label = labels.isEmpty ? "Headroom — open all accounts" : labels.joined(separator: "\n")
+        let alerts = monitor.entries.filter { ResetReminders.expiringCount($0, now: now) > 0 }
+            .map { "\($0.account.provider.title), \($0.displayName): unused resets expire within 12 hours" }
+        let label = (labels + alerts).isEmpty ? "Headroom — open all accounts" : (labels + alerts).joined(separator: "\n")
         button.toolTip = nil
         button.setAccessibilityLabel(label)
         let nextChange = monitor.entries.filter { $0.account.showInMenuBar }
@@ -242,7 +338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 let account = NSMenuItem(title: entry.displayName, action: nil, keyEquivalent: "")
                 let submenu = NSMenu()
                 submenu.autoenablesItems = false
-                let idle = !demo && login.accountID == nil && !entry.refreshing && !entry.resetting
+                let idle = provider.supportsRead && !demo && login.accountID == nil && !entry.refreshing && !entry.resetting
                 addItem("Refresh", to: submenu, action: #selector(refreshAccount), represented: entry.id.uuidString, enabled: idle)
                 addItem("Reconnect…", to: submenu,
                         action: #selector(reconnectAccount), represented: entry.id.uuidString, enabled: idle)
@@ -367,6 +463,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func applicationWillTerminate(_ notification: Notification) {
         availabilityTimer?.invalidate()
+        localFeatureTimer?.invalidate()
         refreshTimer?.invalidate()
         refreshTask?.cancel()
         login.cancel()

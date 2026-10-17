@@ -6,7 +6,7 @@ struct CodexClient: Sendable {
     var http: ProviderHTTP = ProviderHTTP()
 
     func fetch(_ id: UUID) async throws -> UsageSnapshot {
-        let credential = try CodexCredential.decode(CodexProfile.authData(id, store: store))
+        let credential = try CodexCredential.decode(HelperProfile.authData(id, store: store))
         let data = try await request("wham/usage", credential: credential)
         guard let usage = try? JSONDecoder().decode(CodexUsage.self, from: data) else {
             throw MonitorError.invalidResponse
@@ -38,7 +38,7 @@ struct CodexClient: Sendable {
         guard account.provider == .codex, let owner = account.identity,
               let saved = try store.load().first(where: { $0.id == account.id }), saved.provider == .codex,
               saved.identity?.matches(owner) == true else { throw MonitorError.invalidResponse }
-        let credential = try CodexCredential.decode(CodexProfile.authData(account.id, store: store))
+        let credential = try CodexCredential.decode(HelperProfile.authData(account.id, store: store))
         guard credential.user == owner.accountID, credential.workspace == owner.organizationID else {
             throw MonitorError.identityChanged
         }
@@ -80,7 +80,7 @@ enum CodexAuth {
     static func environment(_ id: UUID, store: AccountStore) throws -> [String: String] {
         do { try store.prepare(id) }
         catch { throw MonitorError.invalidProfile }
-        try CodexProfile.validate(id, store: store)
+        try HelperProfile.validate(id, store: store)
         let home = store.profile(id).deletingLastPathComponent().appendingPathComponent("home")
         return [
             "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
@@ -93,7 +93,7 @@ enum CodexAuth {
     }
 }
 
-private enum CodexProfile {
+enum HelperProfile {
     // Open each component relative to a validated directory descriptor. O_NOFOLLOW
     // keeps a swapped symlink from redirecting the selected UUID's credential read.
     private static func directory(_ id: UUID, store: AccountStore) throws -> Int32 {

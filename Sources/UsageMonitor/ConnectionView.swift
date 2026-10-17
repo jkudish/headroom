@@ -6,6 +6,7 @@ struct ConnectionView: View {
     let account: Account?
     let demo: Bool
     let finish: () -> Void
+    var browserSignIn: (() -> Void)?
     var discover: (Bool, Bool) -> LocalCredentialDiscovery.Report = { environment, dotenv in
         let values = environment ? ProcessInfo.processInfo.environment : [:]
         if dotenv {
@@ -24,15 +25,35 @@ struct ConnectionView: View {
     @State private var readDotenv = true
     @State private var discoveryReport: LocalCredentialDiscovery.Report?
 
+    private var credentialPlaceholder: String {
+        switch provider {
+        case .dataForSEO: "API password"
+        case .cursor: "Session Cookie header"
+        case .grok: "SuperGrok access token"
+        case .anthropicAPI: "Organization Admin key (sk-ant-admin…)"
+        case .openAIAPI: "Organization Admin key"
+        case .xaiAPI: "Team Management key"
+        default: "API key or access token"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("\(account == nil ? "Connect" : "Reconnect") \(provider.title)").font(.title2.weight(.semibold))
+            if let browserSignIn {
+                Button("Sign in to \(provider.title)", systemImage: "person.crop.circle.badge.checkmark", action: browserSignIn)
+                    .disabled(demo)
+                Text(provider == .grok ? "Uses the official Grok CLI in a separate account profile. Choose the right account in your browser." : "Opens a private sign-in window. Your other browser accounts are not imported.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Divider()
+                Text("Or enter credentials manually").font(.headline)
+            }
             Text(provider.connectionHelp).font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Link("Dashboard", destination: provider.dashboardURL)
             if provider.supportsRead && !provider.usesHelper {
                 if provider == .dataForSEO { TextField("API login", text: $username) }
-                SecureField(provider == .dataForSEO ? "API password" : provider == .cursor ? "Cursor session Cookie header" : "API key or access token", text: $key)
+                SecureField(credentialPlaceholder, text: $key)
                     .accessibilityIdentifier("connectionCredential")
                 if provider == .openRouter {
                     Picker("Report", selection: $mode) {
@@ -91,7 +112,7 @@ struct ConnectionView: View {
                 .disabled(demo || (!readEnvironment && !readDotenv))
                 .accessibilityIdentifier("scanLocalCredentials")
             }.toggleStyle(.checkbox).font(.caption)
-            Text("Scan reads these sources. Add or Update saves one key.")
+            Text("Scan finds keys. Choose \(account == nil ? "Add" : "Update") to save one.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .help("The app never runs shell startup files. Its environment may differ from your terminal. Key validity and billing permissions are checked when fetching usage.")
@@ -125,7 +146,8 @@ struct ConnectionView: View {
                             }
                         }
                         if candidates.isEmpty {
-                            Text("No matching keys found.").font(.caption)
+                            Text("No \(provider.title) keys found in the selected sources.").font(.caption)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         ForEach(Array(discoveryReport.issues.enumerated()), id: \.offset) { _, issue in
                             Text(issue.message).font(.caption).foregroundStyle(.secondary)

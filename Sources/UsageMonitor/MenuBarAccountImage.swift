@@ -20,7 +20,11 @@ import AppKit
     }
 
     static func make(_ entries: [AccountEntry], appearance: NSAppearance) -> NSImage {
-        let images = entries.filter { $0.account.showInMenuBar }.map { make($0, appearance: appearance) }
+        var images = entries.filter { $0.account.showInMenuBar }.map { make($0, appearance: appearance) }
+        if entries.contains(where: { !$0.account.showInMenuBar && ResetReminders.expiringCount($0, now: Date()) > 0 }),
+           let alert = NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: "Unused resets expiring") {
+            images.append(alert)
+        }
         guard !images.isEmpty else {
             return NSImage(systemSymbolName: "line.3.horizontal.decrease", accessibilityDescription: "Headroom")!
         }
@@ -58,6 +62,10 @@ import AppKit
                 let letter = String(entry.account.provider.title.prefix(1)) as NSString
                 letter.draw(at: NSPoint(x: 3, y: 3), withAttributes: [.font: NSFont.systemFont(ofSize: 16, weight: .semibold),
                                                                  .foregroundColor: NSColor.labelColor])
+            }
+            if ResetReminders.expiringCount(entry, now: Date()) > 0 {
+                NSColor.systemOrange.setFill()
+                NSBezierPath(ovalIn: NSRect(x: 12, y: 14, width: 7, height: 7)).fill()
             }
             for (index, value) in values.enumerated() {
                 let metric = metrics.indices.contains(index) ? metrics[index] : nil

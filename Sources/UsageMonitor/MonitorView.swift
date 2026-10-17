@@ -8,13 +8,16 @@ struct MonitorView: View {
     let openWindow: () -> Void
     let connect: (Provider, Account?) -> Void
     var showResets: (Account) -> Void = { _ in }
+    var showAgentAccess: () -> Void = {}
+    var setResetAlerts: (UUID, Bool) async throws -> Void = { _, _ in }
+    var initialProvider: Provider?
     @State private var code = ""
     @State private var error: String?
     @State private var removal: UUID?
     @State private var granting: UUID?
     @State private var selectedProvider: Provider?
 
-    private var provider: Provider { selectedProvider ?? monitor.entries.first?.account.provider ?? .claude }
+    private var provider: Provider { selectedProvider ?? initialProvider ?? monitor.entries.first?.account.provider ?? .claude }
     private var accounts: [AccountEntry] { monitor.entries.filter { $0.account.provider == provider } }
 
     var body: some View {
@@ -44,12 +47,12 @@ struct MonitorView: View {
                 .listStyle(.sidebar)
                 .navigationTitle("Headroom")
                 Divider()
-                HStack {
+                VStack(alignment: .leading, spacing: 12) {
                     Button("Refresh all", systemImage: "arrow.clockwise") {
                         Task { for entry in monitor.entries { await monitor.refresh(entry.id) } }
                     }.disabled(demo || login.accountID != nil || monitor.entries.isEmpty || monitor.entries.contains(where: \.refreshing))
-                    Spacer()
-                }.buttonStyle(.borderless).padding(14)
+                    Button("Local agent access…", systemImage: "terminal", action: showAgentAccess)
+                }.buttonStyle(.borderless).frame(maxWidth: .infinity, alignment: .leading).padding(14)
             }
             .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
         } detail: {
@@ -119,7 +122,7 @@ struct MonitorView: View {
                     let retry = monitor.rateLimitEndsAt(entry.id)
                     HStack {
                         Button("Refresh") { Task { await monitor.refresh(entry.id) } }
-                            .disabled(demo || entry.refreshing || entry.resetting || login.accountID != nil || retry != nil)
+                            .disabled(!entry.account.provider.supportsRead || demo || entry.refreshing || entry.resetting || login.accountID != nil || retry != nil)
                         if let retry {
                             Text("Retry after \(retry.formatted(date: .omitted, time: .shortened))")
                                 .font(.caption).foregroundStyle(.secondary)
@@ -129,6 +132,7 @@ struct MonitorView: View {
                 Spacer()
                 Menu {
                     Button("Reconnect…") { reconnect(entry.account) }
+                        .disabled(!entry.account.provider.supportsRead)
                     Link("Dashboard", destination: entry.account.provider.dashboardURL)
                     Button("Remove account", role: .destructive) { removal = entry.id }
                 } label: { Image(systemName: "ellipsis") }
@@ -143,7 +147,24 @@ struct MonitorView: View {
             Toggle("Show in menu bar", isOn: Binding(get: { entry.account.showInMenuBar }, set: { visible in
                 perform { try monitor.setMenuBarVisibility(entry.id, visible: visible) }
             })).toggleStyle(.switch).controlSize(.small).disabled(demo)
-            if entry.snapshot == nil {
+            if [.claude, .codex].contains(entry.account.provider) {
+                Toggle("Reset expiry alerts", isOn: Binding(get: { entry.account.options["resetAlerts"] == "true" }, set: { enabled in
+                    changeResetAlerts(entry.id, enabled: enabled)
+                })).toggleStyle(.switch).controlSize(.small).disabled(demo)
+                Text("Unused resets: 12h, 3h and 1h before expiry. For persistent alerts, choose Alerts for Headroom in System Settings → Notifications.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    let count = ResetReminders.expiringCount(entry, now: context.date)
+                    if count > 0 {
+                        Label("\(count) unused reset\(count == 1 ? "" : "s") expire within 12 hours", systemImage: "exclamationmark.circle.fill")
+                            .foregroundStyle(.orange).font(.callout)
+                    }
+                }
+            }
+            if !entry.account.provider.supportsRead {
+                Text(entry.account.provider.connectionHelp)
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else if entry.snapshot == nil {
                 VStack(alignment: .leading, spacing: 6) {
                     Button(entry.account.provider.usesHelper ? "Sign in" : "Enter credentials") { reconnect(entry.account) }
                     if entry.error == MonitorError.keychainUnavailable.localizedDescription {
@@ -160,11 +181,19 @@ struct MonitorView: View {
         .font(.body).padding(.vertical, 8)
     }
 
+    private func changeResetAlerts(_ id: UUID, enabled: Bool) {
+        Task {
+            do { try await setResetAlerts(id, enabled); error = nil }
+            catch { self.error = (error as? MonitorError)?.localizedDescription ?? "Could not enable notifications." }
+        }
+    }
+
     private var loginSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Sign in: \(monitor.entries.first(where: { $0.id == login.accountID })?.account.displayName ?? "Claude")").font(.headline)
             Text(login.provider == .codex
                  ? "Open the link in the right browser profile, then enter the code on OpenAI's page."
+                 : login.provider == .grok ? "Finish signing in in your browser. Choose the Grok account you want to connect."
                  : "Open the link in the right browser profile. Sign in, then paste Claude's code below.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 .help(login.provider == .codex ? "Enable device code authorization in ChatGPT Security settings if sign-in is blocked." : "Use the browser profile for the account you want to connect.")
@@ -181,6 +210,8 @@ struct MonitorView: View {
                             NSPasteboard.general.setString(deviceCode, forType: .string)
                         }.accessibilityIdentifier("copyDeviceCode")
                     }
+                    HStack { ProgressView().controlSize(.small); Text("Waiting for browser approval…") }
+                } else if login.provider == .grok {
                     HStack { ProgressView().controlSize(.small); Text("Waiting for browser approval…") }
                 } else {
                     SecureField("Authorization code", text: $code).textFieldStyle(.roundedBorder).accessibilityIdentifier("authorizationCode")
