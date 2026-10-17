@@ -58,7 +58,7 @@ struct MonitorView: View {
                     ProviderIcon(provider: provider).frame(width: 36, height: 36)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(provider.title).font(.title2.weight(.semibold))
-                        Text("\(accounts.count) \(accounts.count == 1 ? "account" : "accounts") · Checks every \(provider == .claude ? "5 minutes" : "minute")")
+                        Text("\(accounts.count) \(accounts.count == 1 ? "account" : "accounts") · \(provider.supportsRead ? "Auto: " + (provider == .claude ? "5 min" : "1 min") : "Usage unavailable")")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -105,8 +105,17 @@ struct MonitorView: View {
         VStack(alignment: .leading, spacing: 16) {
             AccountSummaryView(entry: entry)
             HStack {
-                Button("Refresh") { Task { await monitor.refresh(entry.id) } }
-                    .disabled(demo || entry.refreshing || entry.resetting || login.accountID != nil)
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    let retry = monitor.rateLimitEndsAt(entry.id)
+                    HStack {
+                        Button("Refresh") { Task { await monitor.refresh(entry.id) } }
+                            .disabled(demo || entry.refreshing || entry.resetting || login.accountID != nil || retry != nil)
+                        if let retry {
+                            Text("Retry after \(retry.formatted(date: .omitted, time: .shortened))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 Spacer()
                 Menu {
                     Button("Reconnect…") { reconnect(entry.account) }

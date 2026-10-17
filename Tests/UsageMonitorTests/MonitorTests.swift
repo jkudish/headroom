@@ -653,6 +653,8 @@ private actor FixtureService {
     await monitor.refresh(claude.id)
     await monitor.refresh(other.id)
     for delay: TimeInterval in [600, 1200, 1800, 1800] {
+        #expect(monitor.rateLimitEndsAt(claude.id) == now.addingTimeInterval(delay))
+        #expect(monitor.rateLimitEndsAt(other.id) == nil)
         let before = await service.count(claude.id)
         await monitor.refresh(claude.id)
         now += delay - 1
@@ -661,6 +663,7 @@ private actor FixtureService {
         #expect(await service.count(claude.id) == before)
         #expect(monitor.entries[0].error == MonitorError.http(429).localizedDescription)
         now += 1
+        #expect(monitor.rateLimitEndsAt(claude.id) == nil)
         await monitor.refreshDue()
         #expect(await service.count(claude.id) == before + 1)
     }
@@ -669,6 +672,7 @@ private actor FixtureService {
     await monitor.refreshDue()
     let recovered = await service.count(claude.id)
     #expect(monitor.entries[0].error == nil)
+    #expect(monitor.rateLimitEndsAt(claude.id) == nil)
     #expect(monitor.entries[0].snapshot?.metrics.first?.value == Double(recovered))
     now += 299
     await monitor.refreshDue(maxAge: 30)

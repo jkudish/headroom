@@ -28,12 +28,8 @@ struct AccountSummaryView: View {
                 }
             } else {
                 HStack(alignment: .top, spacing: 9) {
-                    ProviderIcon(provider: entry.account.provider).frame(width: 22, height: 22)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(entry.displayName).font(.headline).lineLimit(1).truncationMode(.middle)
-                            .help(entry.displayName)
-                        Text(entry.account.provider.title).font(.caption).foregroundStyle(.secondary)
-                    }
+                    Text(entry.displayName).font(.headline).lineLimit(1).truncationMode(.middle)
+                        .help(entry.displayName)
                     Spacer(minLength: 4)
                     VStack(alignment: .trailing, spacing: 3) {
                         Text(entry.snapshot?.plan ?? "Plan unavailable").font(.caption).foregroundStyle(.secondary)

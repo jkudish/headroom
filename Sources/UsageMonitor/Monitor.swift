@@ -156,9 +156,14 @@ final class Monitor {
         }
     }
 
+    func rateLimitEndsAt(_ id: UUID) -> Date? {
+        guard let schedule = refreshSchedule[id], schedule.rateLimited, now() < schedule.after else { return nil }
+        return schedule.after
+    }
+
     func refresh(_ id: UUID) async {
         guard let index = entries.firstIndex(where: { $0.id == id }), !entries[index].refreshing, !entries[index].resetting else { return }
-        if let schedule = refreshSchedule[id], schedule.rateLimited, now() < schedule.after { return }
+        if rateLimitEndsAt(id) != nil { return }
         let requestID = UUID()
         requests[id] = requestID
         entries[index].refreshing = true
