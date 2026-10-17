@@ -253,7 +253,8 @@ extension Provider {
         let name: String
         switch self {
         case .claude: name = "claude-logo"
-        case .codex, .openAIAPI: name = "openai-logo"
+        case .codex: name = "codex-logo"
+        case .openAIAPI: name = "openai-logo"
         case .amp: name = "amp-logo"
         case .openRouter: name = "openrouter-logo"
         case .anthropicAPI: name = "anthropic-logo"
@@ -277,7 +278,7 @@ extension Provider {
         case .kagi: name = "kagi-logo"
         }
         let image = Bundle.module.url(forResource: name, withExtension: "png").flatMap(NSImage.init(contentsOf:))
-        image?.isTemplate = [Self.codex, .openAIAPI, .amp, .valyu].contains(self)
+        image?.isTemplate = [Self.codex, .openAIAPI, .anthropicAPI, .xaiAPI, .grok, .amp, .valyu].contains(self)
         return image
     }
 }

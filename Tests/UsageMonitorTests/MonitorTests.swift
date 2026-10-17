@@ -54,6 +54,33 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     for provider in Provider.allCases {
         #expect(provider.logo != nil, "Missing logo for \(provider.title)")
     }
+    #expect(Provider.codex.logo?.tiffRepresentation != Provider.openAIAPI.logo?.tiffRepresentation,
+            "Codex uses its product mark, not the OpenAI blossom")
+}
+
+@Test @MainActor func monochromeMenuMarksHaveNoBackgroundTileAndFollowAppearance() throws {
+    for provider in [Provider.codex, .openAIAPI, .anthropicAPI, .xaiAPI, .amp, .grok, .valyu] {
+        let logo = try #require(provider.logo)
+        let source = try #require(logo.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        #expect(source.colorAt(x: 0, y: 0)?.alphaComponent == 0, "Background tile for \(provider.title)")
+        for theme in [NSAppearance.Name.aqua, .darkAqua] {
+            let appearance = try #require(NSAppearance(named: theme))
+            let image = MenuBarAccountImage.make(AccountEntry(account: Account(label: "", provider: provider)), appearance: appearance)
+            let bitmap = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+            let scale = CGFloat(bitmap.pixelsWide) / image.size.width
+            var visiblePixels = 0
+            var wrongColorPixels = 0
+            for x in 0..<Int(18 * scale) {
+                for y in 0..<bitmap.pixelsHigh {
+                    guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), pixel.alphaComponent > 0.8 else { continue }
+                    visiblePixels += 1
+                    if theme == .darkAqua ? pixel.redComponent <= 0.65 : pixel.redComponent >= 0.35 { wrongColorPixels += 1 }
+                }
+            }
+            #expect(visiblePixels > 10, "Empty menu-bar mark for \(provider.title)")
+            #expect(wrongColorPixels == 0, "Wrong menu-bar contrast for \(provider.title), \(theme.rawValue)")
+        }
+    }
 }
 
 @Test @MainActor func retiredExaAccountsStayReadableButNeverPoll() async throws {
