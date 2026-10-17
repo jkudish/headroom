@@ -56,7 +56,7 @@ struct AccountSummaryView: View {
                 if compact {
                     rows
                 } else {
-                    LazyVGrid(columns: [GridItem(.flexible(), alignment: .topLeading), GridItem(.flexible(), alignment: .topLeading)],
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), alignment: .topLeading)],
                               alignment: .leading, spacing: 18) {
                         rows
                     }

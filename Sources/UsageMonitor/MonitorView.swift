@@ -66,24 +66,34 @@ struct MonitorView: View {
                         .disabled(demo || login.accountID != nil || !provider.supportsRead)
                         .accessibilityIdentifier("addAccount")
                 }.padding(24)
-                Form {
-                    if demo { Label("Demo data", systemImage: "testtube.2").foregroundStyle(.orange) }
-                    if login.accountID != nil { Section { loginSection } }
-                    if accounts.isEmpty {
-                        ContentUnavailableView {
-                            Label("No \(provider.title) accounts", systemImage: "person.crop.circle.badge.plus")
-                        } description: {
-                            Text("Add an account to see its usage here.")
-                        } actions: {
-                            Button("Add account") { addProvider(provider) }
-                                .disabled(demo || login.accountID != nil || !provider.supportsRead)
+                GeometryReader { geometry in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            if demo { Label("Demo data", systemImage: "testtube.2").foregroundStyle(.orange) }
+                            if login.accountID != nil { GroupBox { loginSection.padding(8) } }
+                            if accounts.isEmpty {
+                                ContentUnavailableView {
+                                    Label("No \(provider.title) accounts", systemImage: "person.crop.circle.badge.plus")
+                                } description: {
+                                    Text("Add an account to see its usage here.")
+                                } actions: {
+                                    Button("Add account") { addProvider(provider) }
+                                        .disabled(demo || login.accountID != nil || !provider.supportsRead)
+                                }.frame(maxWidth: .infinity)
+                            }
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .topLeading),
+                                                     count: accounts.count > 1 && geometry.size.width >= 640 ? 2 : 1),
+                                      alignment: .leading, spacing: 16) {
+                                ForEach(accounts) { entry in
+                                    GroupBox { accountSection(entry).padding(.horizontal, 8) }
+                                        .id(entry.id)
+                                }
+                            }
+                            if let message = error ?? login.error { UsageWarning(message: message) }
                         }
+                        .padding(24)
                     }
-                    ForEach(accounts) { entry in
-                        Section { accountSection(entry) }
-                    }
-                    if let message = error ?? login.error { UsageWarning(message: message) }
-                }.formStyle(.grouped)
+                }
             }
         }
         .frame(minWidth: 740, minHeight: 480)
