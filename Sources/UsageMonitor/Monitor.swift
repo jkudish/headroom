@@ -220,7 +220,7 @@ final class Monitor {
             }
             switch error as? MonitorError {
             case .signInRequired, .missingScope, .keychainUnavailable, .invalidProfile, .identityChanged,
-                 .duplicateAccount, .http(401), .http(403), .unsupported:
+                 .duplicateAccount, .http(401), .http(403), .unsupported, .renewalUnconfirmed:
                 // Only a user retry/reconnect may resume credentials that require intervention.
                 refreshSchedule[id] = nil
             default:

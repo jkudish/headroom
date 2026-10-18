@@ -346,7 +346,7 @@ struct Credential: Decodable, Sendable {
         return "Max \(tier[index + 1])"
     }
 
-    static func decode(_ data: Data, now: Date = Date()) throws -> Self {
+    static func decode(_ data: Data, now: Date = Date(), allowExpired: Bool = false) throws -> Self {
         struct Root: Decodable { let claudeAiOauth: Credential? }
         guard let root = try? JSONDecoder().decode(Root.self, from: data),
               let credential = root.claudeAiOauth,
@@ -354,7 +354,7 @@ struct Credential: Decodable, Sendable {
             throw MonitorError.signInRequired
         }
         guard credential.scopes?.contains("user:profile") == true else { throw MonitorError.missingScope }
-        if let expiration = credential.expiresAt, expiration / 1000 <= now.timeIntervalSince1970 + 30 {
+        if !allowExpired, let expiration = credential.expiresAt, expiration / 1000 <= now.timeIntervalSince1970 + 30 {
             throw MonitorError.signInRequired
         }
         return credential
@@ -378,7 +378,7 @@ extension Credential {
 enum MonitorError: Error, LocalizedError, Equatable {
     case signInRequired, missingScope, identityChanged, duplicateAccount
     case keychainUnavailable, invalidProfile, invalidResponse, http(Int), network
-    case helperMissing, helperFailed, loginBusy, invalidCode
+    case helperMissing, helperFailed, loginBusy, invalidCode, renewalUnconfirmed
     case unsupported(String)
 
     var errorDescription: String? {
@@ -397,7 +397,8 @@ enum MonitorError: Error, LocalizedError, Equatable {
         case .network: "Provider unreachable. Check your connection and retry."
         case .helperMissing: "Install Claude Code at ~/.local/bin/claude, /opt/homebrew/bin/claude, or /usr/local/bin/claude."
         case .helperFailed: "Sign-in failed. Try again."
-        case .loginBusy: "Finish or cancel the current sign-in first."
+        case .loginBusy: "This account is signing in or renewing. Wait and try again."
+        case .renewalUnconfirmed: "Could not confirm renewed credentials. Sign in again to reconnect this account."
         case .invalidCode: "Paste Claude's authorization code, not an API key or URL."
         case .unsupported(let message): message
         }

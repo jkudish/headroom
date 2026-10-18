@@ -167,15 +167,23 @@ struct MonitorView: View {
             } else if entry.snapshot == nil {
                 VStack(alignment: .leading, spacing: 6) {
                     Button(entry.account.provider.usesHelper ? "Sign in" : "Enter credentials") { reconnect(entry.account) }
-                    if entry.error == MonitorError.keychainUnavailable.localizedDescription {
+                    if entry.account.provider != .claude && entry.error == MonitorError.keychainUnavailable.localizedDescription {
                         Button("Allow Keychain access") { grantAccess(entry.id) }
                     }
                 }.disabled(demo || entry.refreshing || login.accountID != nil || granting != nil)
-                if entry.error == MonitorError.keychainUnavailable.localizedDescription {
+                if entry.account.provider != .claude && entry.error == MonitorError.keychainUnavailable.localizedDescription {
                     Text("Choose Always Allow for this account's Keychain entry.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         .help("Unlock the login Keychain if macOS asks. Approve only this entry to allow later usage checks.")
                 }
+            }
+            if entry.account.provider == .claude,
+               entry.error == MonitorError.keychainUnavailable.localizedDescription || (try? monitor.store.hasDurableClaudeAccess(entry.id)) != true {
+                Button("Allow Keychain access") { grantAccess(entry.id) }
+                    .disabled(demo || entry.refreshing || login.accountID != nil || granting != nil)
+                Text("Allow ongoing access through macOS’s security tool for this account only. Credentials stay in Claude’s scoped store; Headroom can renew them automatically.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .help("Unlock your login Keychain if needed. No global Claude login or other account is read.")
             }
         }
         .font(.body).padding(.vertical, 8)
@@ -197,6 +205,10 @@ struct MonitorView: View {
                  : "Open the link in the right browser profile. Sign in, then paste Claude's code below.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 .help(login.provider == .codex ? "Enable device code authorization in ChatGPT Security settings if sign-in is blocked." : "Use the browser profile for the account you want to connect.")
+            if login.provider == .claude {
+                Text("Headroom keeps access to this account through macOS’s security tool for usage checks and automatic renewal. Your other Claude logins are not used.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             if let url = login.authorizationURL {
                 HStack {
                     Link("Open \(login.provider.title) sign-in", destination: url)
@@ -255,7 +267,7 @@ struct MonitorView: View {
         Task {
             do {
                 try await Task.detached {
-                    if provider == .claude { _ = try store.credentials(id, allowInteraction: true) }
+                    if provider == .claude { try await ClaudeAuth.grantDurableAccess(id, store: store) }
                     else { _ = try store.secrets(id, allowInteraction: true) }
                 }.value
                 await monitor.refresh(id)

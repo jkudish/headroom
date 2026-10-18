@@ -57,6 +57,10 @@ struct AccountStore: Sendable {
     }
 
     func credentials(_ id: UUID, allowInteraction: Bool = false) throws -> Credential {
+        try Credential.decode(credentialData(id, allowInteraction: allowInteraction))
+    }
+
+    func credentialData(_ id: UUID, allowInteraction: Bool = false) throws -> Data {
         try validateProfile(id)
         var query = keychainQuery(id)
         query[kSecReturnData as String] = true
@@ -68,8 +72,13 @@ struct AccountStore: Sendable {
         let status = try keychainOperation(allowInteraction: allowInteraction) {
             SecItemCopyMatching(query as CFDictionary, &item)
         }
-        if status == errSecSuccess, let data = item as? Data { return try Credential.decode(data) }
+        if status == errSecSuccess, let data = item as? Data { return data }
         guard status == errSecItemNotFound else { throw MonitorError.keychainUnavailable }
+        return try credentialFile(id)
+    }
+
+    func credentialFile(_ id: UUID) throws -> Data {
+        try validateProfile(id)
         // Claude Code uses this scoped fallback when the macOS Keychain cannot accept a write.
         let file = profile(id).appendingPathComponent(".credentials.json")
         guard FileManager.default.fileExists(atPath: file.path) else { throw MonitorError.signInRequired }
@@ -77,7 +86,28 @@ struct AccountStore: Sendable {
         let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
         guard let mode = attributes[.posixPermissions] as? NSNumber,
               mode.intValue & 0o077 == 0 else { throw MonitorError.invalidProfile }
-        return try Credential.decode(Data(contentsOf: file))
+        return try Data(contentsOf: file)
+    }
+
+    // This is consent, not a credential copy. Only Headroom login or the explicit grant sets it.
+    func enableDurableClaudeAccess(_ id: UUID) throws {
+        try prepare(id)
+        let file = profile(id).appendingPathComponent(".headroom-keychain-access")
+        try rejectSymlink(file)
+        try Data("1".utf8).write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    }
+
+    func hasDurableClaudeAccess(_ id: UUID) throws -> Bool {
+        try validateProfile(id)
+        let file = profile(id).appendingPathComponent(".headroom-keychain-access")
+        try rejectSymlink(file)
+        return (try? Data(contentsOf: file)) == Data("1".utf8)
+    }
+
+    func claudeLease(_ id: UUID) throws -> ClaudeCredentialLease {
+        try validateProfile(id)
+        return try ClaudeCredentialLease(file: profile(id).appendingPathComponent(".headroom-auth.lock"))
     }
 
     func saveSecrets(_ secrets: ConnectionSecrets, for id: UUID) throws {
@@ -138,6 +168,9 @@ struct AccountStore: Sendable {
 
     func deleteProfile(_ id: UUID) throws {
         try validateProfile(id)
+        // Removal must not race a helper persisting a rotated credential.
+        let lease = FileManager.default.fileExists(atPath: profile(id).path) ? try claudeLease(id) : nil
+        defer { withExtendedLifetime(lease) {} }
         try keychainOperation(allowInteraction: true) {
             let status = SecItemDelete(keychainQuery(id) as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else { throw MonitorError.keychainUnavailable }

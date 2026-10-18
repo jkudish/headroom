@@ -2,7 +2,7 @@ import Foundation
 
 enum ScopedCLI {
     static func run(executable: URL, arguments: [String], environment: [String: String], directory: URL,
-                    billingRPC: Bool = false, timeout: TimeInterval = 30) async throws -> Data {
+                    billingRPC: Bool = false, timeout: TimeInterval = 30, notFoundStatus: Int32? = nil) async throws -> Data {
         let child = ChildProcess()
         return try await withTaskCancellationHandler {
             try await Task.detached {
@@ -74,6 +74,9 @@ enum ScopedCLI {
                     }
                 }
                 process.waitUntilExit()
+                if !child.stopped, let notFoundStatus, process.terminationStatus == notFoundStatus {
+                    throw MonitorError.signInRequired
+                }
                 guard !billingRPC, !child.stopped, process.terminationStatus == 0 else { throw MonitorError.helperFailed }
                 return bytes
             }.value

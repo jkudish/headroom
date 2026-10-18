@@ -26,6 +26,7 @@ final class LoginController {
         guard let executable else {
             throw MonitorError.unsupported("Install \(provider.title)'s official CLI at ~/.local/bin/\(helper) or with Homebrew.")
         }
+        let lease = provider == .claude ? try store.claudeLease(id) : nil
         let process = Process()
         let input = Pipe()
         let output = Pipe()
@@ -45,10 +46,15 @@ final class LoginController {
         process.terminationHandler = { [weak self] process in
             let succeeded = process.terminationStatus == 0
             Task { @MainActor in
+                defer { withExtendedLifetime(lease) {} }
                 guard let self, self.attempt == attempt else { return }
                 self.finish()
-                if succeeded { completion(id) }
-                else { self.error = MonitorError.helperFailed.localizedDescription }
+                if succeeded {
+                    do {
+                        if provider == .claude { try store.enableDurableClaudeAccess(id) }
+                        completion(id)
+                    } catch { self.error = MonitorError.invalidProfile.localizedDescription }
+                } else { self.error = MonitorError.helperFailed.localizedDescription }
             }
         }
         self.process = process
@@ -88,7 +94,8 @@ final class LoginController {
     private func finish() {
         attempt = nil
         output?.fileHandleForReading.readabilityHandler = nil
-        process?.terminationHandler = nil
+        // A cancelled helper keeps the credential lease until its process really exits.
+        if process?.isRunning != true { process?.terminationHandler = nil }
         try? input?.fileHandleForWriting.close()
         try? output?.fileHandleForReading.close()
         process = nil

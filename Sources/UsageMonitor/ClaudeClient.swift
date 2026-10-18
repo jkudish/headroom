@@ -1,11 +1,14 @@
 import Foundation
 
 struct ClaudeClient: Sendable {
-    let credentials: @Sendable (UUID) throws -> Credential
+    let credentials: @Sendable (UUID) async throws -> Credential
+    let renew: (@Sendable (UUID, String) async throws -> Credential)?
     let send: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
     init(store: AccountStore) {
-        credentials = { try store.credentials($0) }
+        let auth = ClaudeAuth(store: store)
+        credentials = { try await auth.credential($0) }
+        renew = { try await auth.credential($0, rejectedToken: $1) }
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
         config.urlCache = nil
@@ -19,14 +22,25 @@ struct ClaudeClient: Sendable {
         }
     }
 
-    init(credentials: @escaping @Sendable (UUID) throws -> Credential,
+    init(credentials: @escaping @Sendable (UUID) async throws -> Credential,
+         renew: (@Sendable (UUID, String) async throws -> Credential)? = nil,
          send: @escaping @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)) {
         self.credentials = credentials
+        self.renew = renew
         self.send = send
     }
 
     func fetch(_ id: UUID) async throws -> UsageSnapshot {
-        let credential = try credentials(id)
+        let credential = try await credentials(id)
+        do { return try await fetch(credential) }
+        catch MonitorError.http(401) {
+            guard let renew else { throw MonitorError.http(401) }
+            // At most one renewal/retry; 403 and 429 never spend a refresh token.
+            return try await fetch(renew(id, credential.accessToken))
+        }
+    }
+
+    private func fetch(_ credential: Credential) async throws -> UsageSnapshot {
         let token = credential.accessToken
         let profile = try await request("profile", token: token)
         struct Profile: Decodable {
