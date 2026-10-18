@@ -88,6 +88,19 @@ func malformedOrUnreadableClaudeRenewalReceiptFailsClosedBeforeExchange(unreadab
     #expect(await fixture.renewals == 0)
 }
 
+@Test func missingClaudeHelperDoesNotSpendOrQuarantineTheRefreshToken() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let store = try AccountStore(root: root)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let id = UUID()
+    try store.prepare(id)
+    try store.enableDurableClaudeAccess(id)
+    let fixture = AuthFixture([id: oauth("expired")])
+    let auth = ClaudeAuth(store: store, read: { try await fixture.read($0) }, renew: { _, _ in throw MonitorError.helperMissing })
+    await #expect(throws: MonitorError.helperMissing) { try await auth.credential(id) }
+    #expect(!FileManager.default.fileExists(atPath: store.profile(id).appendingPathComponent("renewal.json").path))
+}
+
 @Test func legacyClaudeAccessDoesNotStartReplacementLoginWithoutDurableConsent() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let store = try AccountStore(root: root)

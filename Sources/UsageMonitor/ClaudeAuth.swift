@@ -98,6 +98,11 @@ struct ClaudeAuth: Sendable {
         defer { try? receipt.close() }
         try receipt.synchronize()
         do { try await renew(id, environment) }
+        catch MonitorError.helperMissing {
+            // Executable lookup failed before spawning: no token exchange was possible.
+            try FileManager.default.removeItem(at: journal)
+            throw MonitorError.helperMissing
+        }
         catch { /* A failed/terminated helper may still have persisted a rotated credential. */ }
         guard let updatedData = try? await read(id),
               let updated = try? Credential.decode(updatedData),
@@ -110,17 +115,17 @@ struct ClaudeAuth: Sendable {
     static func grantDurableAccess(_ id: UUID, store: AccountStore) async throws {
         let lease = try store.claudeLease(id)
         defer { withExtendedLifetime(lease) {} }
-        _ = try Credential.decode(try await brokeredRead(id, store: store), allowExpired: true)
+        _ = try Credential.decode(try await brokeredRead(id, store: store, timeout: 120), allowExpired: true)
         try store.enableDurableClaudeAccess(id)
     }
 
-    private static func brokeredRead(_ id: UUID, store: AccountStore) async throws -> Data {
+    private static func brokeredRead(_ id: UUID, store: AccountStore, timeout: TimeInterval = 5) async throws -> Data {
         // Never use an ambient service, unscoped login, shell, or user-supplied keychain name.
         let environment = try store.helperEnvironment(id)
         do {
             let data = try await ScopedCLI.run(executable: URL(fileURLWithPath: "/usr/bin/security"),
                 arguments: ["find-generic-password", "-a", NSUserName(), "-s", store.keychainService(id), "-w"],
-                environment: environment, directory: store.profile(id), timeout: 5, notFoundStatus: 44)
+                environment: environment, directory: store.profile(id), timeout: timeout, notFoundStatus: 44)
             guard data.count <= 65_536, data.first == UInt8(ascii: "{") else { throw MonitorError.keychainUnavailable }
             return data
         } catch MonitorError.signInRequired { return try store.credentialFile(id) }
