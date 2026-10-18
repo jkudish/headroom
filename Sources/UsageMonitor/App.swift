@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var refreshTimer: Timer?
     private var refreshTask: Task<Void, Never>?
     private var appearanceObservation: NSKeyValueObservation?
+    private var renderedAppearance: NSAppearance.Name?
     private var window: NSWindow?
     private var connectionWindow: NSWindow?
     private var monitor: Monitor?
@@ -278,9 +279,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let button = status?.button else { return }
         if appearanceObservation == nil {
             appearanceObservation = button.observe(\.effectiveAppearance) { [weak self] _, _ in
-                Task { @MainActor in self?.updateStatusItem() }
+                Task { @MainActor in
+                    // Drawing briefly changes appearance; compare again after drawing has finished.
+                    guard let self, self.status?.button?.effectiveAppearance.name != self.renderedAppearance else { return }
+                    self.updateStatusItem()
+                }
             }
         }
+        renderedAppearance = button.effectiveAppearance.name
         button.image = MenuBarAccountImage.make(monitor.entries, appearance: button.effectiveAppearance)
         let labels = monitor.entries.filter { $0.account.showInMenuBar }.map { entry in
             let readings = entry.menuBarMetrics.map { "\($0.title): \(MenuBarAccountImage.text($0, provider: entry.account.provider))" }.joined(separator: ", ")
