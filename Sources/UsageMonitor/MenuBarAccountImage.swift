@@ -5,7 +5,8 @@ import AppKit
         guard let value = metric.value, value.isFinite else { return "—" }
         if metric.kind == .quota {
             if value > 0 && value < 1 { return "<1%" }
-            return value.rounded(.down).formatted(.number.precision(.fractionLength(0))) + "%"
+            // Division can leave an exact percentage one floating-point step below its integer.
+            return value.nextUp.rounded(.down).formatted(.number.precision(.fractionLength(0))) + "%"
         }
         if ["USD", "EUR", "GBP", "CAD", "CNY"].contains(metric.unit) {
             return value.formatted(.currency(code: metric.unit))

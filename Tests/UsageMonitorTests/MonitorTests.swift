@@ -168,7 +168,8 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
 @MainActor @Test func quotaTextRoundsDownWithoutClaimingTinyBalancesAreEmpty() {
     let cases: [(Double, String)] = [(0, "0%"), (0.04, "<1%"), (0.49, "<1%"), (0.5, "<1%"),
                                    (1, "1%"), (8.9, "8%"), (57.3, "57%"), (99.49, "99%"),
-                                   (99.5, "99%"), (99.9, "99%"), (100, "100%")]
+                                   (99.5, "99%"), (99.9, "99%"), (99.99999999, "99%"), (100, "100%"),
+                                   (57.0 / 100 * 100, "57%"), (58.0 / 100 * 100, "58%")]
     for (value, expected) in cases {
         #expect(MenuBarAccountImage.text(.init(title: "Weekly", kind: .quota, value: value)) == expected)
     }
