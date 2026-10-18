@@ -102,6 +102,9 @@ import Testing
     let file = store.profile(id).appendingPathComponent("auth.json")
     try auth.write(to: file)
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    let config = store.profile(id).appendingPathComponent("config.toml")
+    try Data("# Official helper creates a readable config\n".utf8).write(to: config)
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: config.path)
     let http = ProviderHTTP { request in
         #expect(request.url?.absoluteString == "https://cli-chat-proxy.grok.com/v1/user")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-grok-token")
@@ -110,6 +113,8 @@ import Testing
     }
     let client = GrokClient(store: store, http: http, billing: { selected in
         #expect(selected == id)
+        let environment = try GrokAuth.environment(selected, store: store)
+        #expect(environment["GROK_AUTH_PATH"] == file.path)
         return Data(#"{"config":{"creditUsagePercent":27,"prepaidBalance":{"val":1234}},"subscription_tier":"SuperGrok"}"#.utf8)
     })
     let result = try await client.fetch(id)
@@ -119,6 +124,13 @@ import Testing
     #expect(result.metrics.first?.value == 73)
     #expect(result.plan == "SuperGrok")
     await #expect(throws: MonitorError.signInRequired) { try await client.fetch(other) }
+    for mode in [0o664, 0o645] {
+        try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: config.path)
+        await #expect(throws: MonitorError.invalidProfile) { try await client.fetch(id) }
+    }
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: config.path)
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+    await #expect(throws: MonitorError.invalidProfile) { try await client.fetch(id) }
 }
 
 @Test func grokLoginLinksRequireOfficialPKCEAndLoopbackCallback() throws {

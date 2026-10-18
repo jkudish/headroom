@@ -117,17 +117,17 @@ enum HelperProfile {
         }
     }
 
-    private static func check(_ fd: Int32, directory: Bool) throws {
+    private static func check(_ fd: Int32, directory: Bool, allowPublicRead: Bool = false) throws {
         var attributes = stat()
         guard fstat(fd, &attributes) == 0,
-              attributes.st_uid == geteuid(), attributes.st_mode & 0o077 == 0,
+              attributes.st_uid == geteuid(), attributes.st_mode & (allowPublicRead ? 0o033 : 0o077) == 0,
               attributes.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG),
               directory || (attributes.st_nlink == 1 && attributes.st_size <= 1_048_576) else {
             throw MonitorError.invalidProfile
         }
     }
 
-    static func validate(_ id: UUID, store: AccountStore) throws {
+    static func validate(_ id: UUID, store: AccountStore, allowReadableConfig: Bool = false) throws {
         let dir = try directory(id, store: store)
         defer { close(dir) }
         for file in ["auth.json", "config.toml"] {
@@ -137,7 +137,7 @@ enum HelperProfile {
                 throw MonitorError.invalidProfile
             }
             defer { close(fd) }
-            try check(fd, directory: false)
+            try check(fd, directory: false, allowPublicRead: allowReadableConfig && file == "config.toml")
         }
     }
 

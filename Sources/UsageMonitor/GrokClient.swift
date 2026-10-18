@@ -42,7 +42,8 @@ enum GrokAuth {
 
     static func environment(_ id: UUID, store: AccountStore) throws -> [String: String] {
         try store.prepare(id)
-        try HelperProfile.validate(id, store: store)
+        // Grok preserves ordinary config read permissions; credentials remain owner-only.
+        try HelperProfile.validate(id, store: store, allowReadableConfig: true)
         let home = store.profile(id).deletingLastPathComponent().appendingPathComponent("home")
         return ["HOME": home.path, "XDG_CONFIG_HOME": home.appendingPathComponent(".config").path,
                 "GROK_HOME": store.profile(id).path, "GROK_AUTH_PATH": store.profile(id).appendingPathComponent("auth.json").path,

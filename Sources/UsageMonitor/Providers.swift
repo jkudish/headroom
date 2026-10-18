@@ -1,8 +1,8 @@
 import Foundation
 
 enum Provider: String, Codable, CaseIterable, Identifiable, Sendable {
-    case claude, codex, zai, openRouter, searchAPI, dataForSEO, firecrawl
-    case openAIAPI, anthropicAPI, xaiAPI, amp, grok, cursor, serpAPI, tavily, jina, exa
+    case claude, codex, grok, amp, zai, openRouter, searchAPI, dataForSEO, firecrawl
+    case openAIAPI, anthropicAPI, xaiAPI, cursor, serpAPI, tavily, jina, exa
     case parallel, brave, perplexity, valyu, gemini, you, kagi
 
     var id: String { rawValue }

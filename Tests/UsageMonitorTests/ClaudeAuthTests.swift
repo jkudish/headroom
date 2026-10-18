@@ -41,6 +41,22 @@ private actor AuthFixture {
     #expect(!FileManager.default.fileExists(atPath: store.profile(a).appendingPathComponent("renewal.json").path))
 }
 
+@Test(arguments: [14.0, 16.0])
+func claudeCredentialRenewsWithinFifteenMinutesButNotEarlier(minutesLeft: Double) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let store = try AccountStore(root: root)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let id = UUID()
+    try store.prepare(id)
+    try store.enableDurableClaudeAccess(id)
+    let expiry = Date().addingTimeInterval(minutesLeft * 60).timeIntervalSince1970 * 1000
+    let fixture = AuthFixture([id: oauth("still-valid", expiry: expiry)])
+    let auth = ClaudeAuth(store: store, read: { try await fixture.read($0) }, renew: { try await fixture.renew($0, $1) })
+    #expect(try await auth.credential(id).accessToken == (minutesLeft == 14 ? "renewed" : "still-valid"))
+    #expect(try await auth.credential(id).accessToken == (minutesLeft == 14 ? "renewed" : "still-valid"))
+    #expect(await fixture.renewals == (minutesLeft == 14 ? 1 : 0))
+}
+
 @Test func uncertainClaudeRenewalIsNotReplayedAfterRelaunch() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let store = try AccountStore(root: root)

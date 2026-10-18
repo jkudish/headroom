@@ -63,7 +63,7 @@ struct ClaudeAuth: Sendable {
         defer { withExtendedLifetime(lease) {} }
         let data = try await read(id)
         let credential = try Credential.decode(data, allowExpired: true)
-        let expiresSoon = credential.expiresAt.map { $0 / 1000 <= Date().timeIntervalSince1970 + 300 } ?? false
+        let expiresSoon = credential.expiresAt.map { $0 / 1000 <= Date().timeIntervalSince1970 + 900 } ?? false
         let rejected = rejectedToken == credential.accessToken
         if !expiresSoon && !rejected { return try Credential.decode(data) }
         struct Root: Decodable {
