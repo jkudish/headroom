@@ -158,7 +158,7 @@ struct AccountSummaryView: View {
     }
 
     private func quotaValue(_ metric: UsageMetric) -> some View {
-        Text(metric.value == nil ? "Unavailable" : "\(MenuBarAccountImage.text(metric, provider: entry.account.provider)) left")
+        Text(metric.value == nil ? "Unavailable" : "\(MenuBarAccountImage.text(metric)) left")
             .font(textFont.monospacedDigit()).foregroundStyle(metric.remainingColor)
     }
 
@@ -171,7 +171,7 @@ struct AccountSummaryView: View {
                 }
             }.frame(height: 6)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(metric.title) remaining").accessibilityValue("\(remaining) percent")
+                .accessibilityLabel("\(metric.title) remaining").accessibilityValue(MenuBarAccountImage.text(metric))
         }
     }
 

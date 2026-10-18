@@ -289,7 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         renderedAppearance = button.effectiveAppearance.name
         button.image = MenuBarAccountImage.make(monitor.entries, appearance: button.effectiveAppearance)
         let labels = monitor.entries.filter { $0.account.showInMenuBar }.map { entry in
-            let readings = entry.menuBarMetrics.map { "\($0.title): \(MenuBarAccountImage.text($0, provider: entry.account.provider))" }.joined(separator: ", ")
+            let readings = entry.menuBarMetrics.map { "\($0.title): \(MenuBarAccountImage.text($0))" }.joined(separator: ", ")
             return "\(entry.account.provider.title) — \(entry.displayName): \(readings.isEmpty ? entry.error ?? "Usage unavailable" : readings)"
         }
         let alerts = monitor.entries.filter { ResetReminders.expiringCount($0, now: now) > 0 }

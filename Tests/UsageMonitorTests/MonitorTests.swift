@@ -165,14 +165,14 @@ private func response(_ value: String) -> Data { Data(value.utf8) }
     #expect(MenuBarAccountImage.text(.init(title: "Quota", kind: .quota, value: nil)) == "—")
 }
 
-@MainActor @Test func ampQuotaTextMatchesDashboardRoundingWithoutChangingOtherProviders() {
-    let cases: [(Double, String)] = [(0, "0%"), (0.04, "<0.5%"), (0.49, "<0.5%"), (0.5, "1%"),
-                                   (8.9, "9%"), (57.3, "57%"), (99.49, "99%"), (99.5, ">99.5%"), (100, "100%")]
+@MainActor @Test func quotaTextRoundsDownWithoutClaimingTinyBalancesAreEmpty() {
+    let cases: [(Double, String)] = [(0, "0%"), (0.04, "<1%"), (0.49, "<1%"), (0.5, "<1%"),
+                                   (1, "1%"), (8.9, "8%"), (57.3, "57%"), (99.49, "99%"),
+                                   (99.5, "99%"), (99.9, "99%"), (100, "100%")]
     for (value, expected) in cases {
-        #expect(MenuBarAccountImage.text(.init(title: "Agent", kind: .quota, value: value), provider: .amp) == expected)
+        #expect(MenuBarAccountImage.text(.init(title: "Weekly", kind: .quota, value: value)) == expected)
     }
-    #expect(MenuBarAccountImage.text(.init(title: "Weekly", kind: .quota, value: 8.9), provider: .codex) == "8.9%")
-    #expect(MenuBarAccountImage.text(.init(title: "Agent", kind: .quota, value: nil), provider: .amp) == "—")
+    #expect(MenuBarAccountImage.text(.init(title: "Agent", kind: .quota, value: nil)) == "—")
 }
 
 @Test func freshProfilesNeverUseAnAmbientCredentialAndMetadataSurvivesRestart() throws {
