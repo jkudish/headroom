@@ -7,7 +7,7 @@
 <p align="center">Usage and limits for your AI accounts, in the macOS menu bar.</p>
 
 <p align="center">
-  <a href="#build-and-try-it">Get started</a> ·
+  <a href="#download-and-install">Download</a> ·
   <a href="docs/providers.md">Providers</a> ·
   <a href="docs/accounts.md">Account setup</a> ·
   <a href="docs/local-mcp.md">MCP</a> ·
@@ -16,7 +16,7 @@
 
 Connect multiple Claude and Codex accounts, even when they aren't signed in to your local CLIs. Keep subscription limits, reset times, and API balances together without opening each dashboard.
 
-Headroom is a native SwiftUI/AppKit app. It's free and open source. **Build from source for now; there is no packaged, notarized release.**
+Headroom is a native SwiftUI/AppKit app. It's free and open source. The [Apple silicon download](https://github.com/jkudish/headroom/releases/tag/v0.1) is signed by Joachim Kudish and notarized by Apple.
 
 ## A look at the app
 
@@ -42,6 +42,26 @@ These screenshots use the built-in demo. All accounts and readings are synthetic
 - Let same-Mac agents query cached usage through an optional, read-only [MCP server](docs/local-mcp.md).
 
 Claude, Codex, Grok / SuperGrok, Grok Bot, Amp, and z.ai Coding Plan have connectors, alongside OpenRouter and API billing services. Credential requirements and coverage vary. See the [provider reference](docs/providers.md) before creating a key.
+
+## Download and install
+
+You need **macOS 14 or later on an Apple silicon Mac**. Xcode isn't needed for the download. Intel builds haven't been verified. [Source-build instructions](#build-and-try-it) are below.
+
+1. Download `Headroom-0.1-arm64.zip` from [Releases](https://github.com/jkudish/headroom/releases/tag/v0.1) and unzip it.
+2. Quit Headroom if it's running. Move `Headroom.app` to `~/Applications/`, replacing any older copy. Keep a single installed copy.
+3. Open Headroom, then choose **Add account** in the sidebar.
+
+Claude and Codex need their official CLI helpers installed separately for sign-in. Check [Account setup](docs/accounts.md) and [Providers](docs/providers.md) for each service's requirements.
+
+Changing the signing identity or app location can require new Keychain approvals. To try synthetic accounts before signing in:
+
+```sh
+open -n \
+  "$HOME/Applications/Headroom.app" \
+  --args --demo
+```
+
+Quit that demo instance before opening Headroom normally.
 
 ## Build and try it
 
