@@ -41,20 +41,35 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     #expect(!missingOrb.metrics.contains { $0.title == "Orb" && $0.value != nil })
 }
 
-@Test(arguments: [401, 403, 429])
-func ampDashboardErrorsExplainMissingOrbWithoutDiscardingAgentOrExposingResponseText(_ status: Int) async throws {
+@Test(arguments: [401, 403, 429], [false, true])
+func ampDashboardErrorsExplainMissingOrbWithoutDiscardingAgentOrExposingResponseText(_ status: Int, _ legacyStatus: Bool) async throws {
     let client = AdditionalClient(http: ProviderHTTP { request in
         let panel = request.url?.path.contains("/remote/") == true
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer selected-amp")
         #expect(request.value(forHTTPHeaderField: "Cookie") == nil)
-        let body = panel ? """
+        let error = legacyStatus ? """
+            {"type":"error","status":\(status),"error":{"message":"private-provider-detail"}}
+            """ : """
             {"type":"error","error":{"status":\(status),"message":"private-provider-detail"}}
-            """ : #"{"ok":true,"result":{"displayText":"agent usage $34.32 of $600 remaining"}}"#
+            """
+        let body = panel ? error : #"{"ok":true,"result":{"displayText":"agent usage $34.32 of $600 remaining"}}"#
         return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     })
     let result = try await client.fetch(.init(label: "", provider: .amp), secrets: .init(key: "selected-amp"))
     #expect(result.metrics.first { $0.title == "Agent remaining" }?.value == 34.32)
     #expect(result.metrics.first { $0.title == "Orb usage" }?.detail == "Unavailable — dashboard request failed (HTTP \(status))")
+    #expect(!result.metrics.contains { ($0.detail ?? "").contains("private-provider-detail") })
+}
+
+@Test func ampDashboardRedirectExplainsMissingOrbWithoutExposingItsLocation() async throws {
+    let panel = #"[{"redirect":1},"/sign-in?private-provider-detail"]"#
+    let encoded = try JSONSerialization.data(withJSONObject: ["type": "result", "data": panel])
+    let client = AdditionalClient(http: ProviderHTTP { request in
+        (encoded, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }, ampUsage: { _ in "agent usage $34.32 of $600 remaining" })
+    let result = try await client.fetch(.init(label: "", provider: .amp), secrets: .init(key: "selected-amp"))
+    #expect(result.metrics.first { $0.title == "Agent remaining" }?.value == 34.32)
+    #expect(result.metrics.first { $0.title == "Orb usage" }?.detail == "Unavailable — dashboard redirected")
     #expect(!result.metrics.contains { ($0.detail ?? "").contains("private-provider-detail") })
 }
 

@@ -412,6 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     @objc private func connectProvider(_ sender: NSMenuItem) {
         guard login.accountID == nil, let value = sender.representedObject as? String, let provider = Provider(rawValue: value) else { return }
+        status?.menu?.cancelTracking()
         openConnection(provider, account: nil)
     }
     @objc private func openDashboard(_ sender: NSMenuItem) {
@@ -419,9 +420,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     @objc private func refreshAll() {
         guard !demo, login.accountID == nil, let monitor else { return }
+        status?.menu?.cancelTracking()
         Task { for entry in monitor.entries { await monitor.refresh(entry.id) } }
     }
-    @objc private func showAccountWindow() { openWindow() }
+    @objc private func showAccountWindow() {
+        status?.menu?.cancelTracking()
+        openWindow()
+    }
     @objc private func showResetDetails(_ sender: NSMenuItem) {
         if let account = selectedAccount(sender) { openResetDetails(account) }
     }

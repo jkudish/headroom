@@ -4,8 +4,9 @@ import OSLog
 struct AdditionalClient: Sendable {
     var http: ProviderHTTP = ProviderHTTP()
     var ampUsage: (@Sendable (String) async throws -> String)? = nil
+    private enum AmpDashboardError: Error { case redirected }
 
-    func fetch(_ account: Account, secrets: ConnectionSecrets) async throws -> UsageSnapshot {
+    func fetch(_ account: Account, secrets: ConnectionSecrets, ampCLIStatus: String = "not configured") async throws -> UsageSnapshot {
         guard !secrets.key.isEmpty,
               !secrets.key.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
             throw MonitorError.signInRequired
@@ -37,13 +38,13 @@ struct AdditionalClient: Sendable {
         }
         let data: Data
         var usedAmpCLI = false
-        var ampCLIStatus = "not configured"
+        var cliStatus = ampCLIStatus
         switch account.provider {
         case .amp:
             var output: String?
             if let ampUsage {
-                do { output = try await ampUsage(secrets.key); ampCLIStatus = "succeeded" }
-                catch { ampCLIStatus = ampFailure(error) }
+                do { output = try await ampUsage(secrets.key); cliStatus = "succeeded" }
+                catch { cliStatus = ampFailure(error) }
             }
             if let text = output {
                 data = try JSONSerialization.data(withJSONObject: ["ok": true, "result": ["displayText": text]])
@@ -128,7 +129,9 @@ struct AdditionalClient: Sendable {
                 }
             }
             if metrics.isEmpty {
-                if usedAmpCLI { return try await AdditionalClient(http: http).fetch(account, secrets: secrets) }
+                if usedAmpCLI {
+                    return try await AdditionalClient(http: http).fetch(account, secrets: secrets, ampCLIStatus: "output not recognized")
+                }
                 throw MonitorError.invalidResponse
             }
             // Amp's own Account panel has separate subscription buckets. The CLI's
@@ -147,6 +150,8 @@ struct AdditionalClient: Sendable {
                     metrics.removeAll { ["Orb", "Orb remaining", "Orb allowance"].contains($0.title) }
                 }
                 metrics.insert(contentsOf: readings, at: 0)
+            } catch AmpDashboardError.redirected {
+                orbStatus = "Unavailable — dashboard redirected"
             } catch MonitorError.invalidResponse {
                 orbStatus = "Unavailable — dashboard response not recognized"
             } catch {
@@ -159,7 +164,7 @@ struct AdditionalClient: Sendable {
                 metrics.append(.init(title: "Orb usage", kind: .note, value: nil, detail: orbStatus))
                 // Fixed status labels only: never log tokens, response bodies, emails or helper output.
                 Logger(subsystem: "dev.jkudish.usage-monitor-poc", category: "AmpOrb")
-                    .notice("CLI: \(ampCLIStatus, privacy: .public); CLI used: \(usedAmpCLI); \(orbStatus, privacy: .public)")
+                    .notice("CLI: \(cliStatus, privacy: .public); CLI used: \(usedAmpCLI); \(orbStatus, privacy: .public)")
             }
         case .grok:
             return try await grokSnapshot(data, identity: GrokClient.identity(token: secrets.key, http: http))
@@ -241,7 +246,7 @@ struct AdditionalClient: Sendable {
         }
         // The remote endpoint can return an application error inside HTTP 200.
         if envelope["type"] as? String == "error",
-           let status = number((envelope["error"] as? [String: Any])?["status"]),
+           let status = number((envelope["error"] as? [String: Any])?["status"] ?? envelope["status"]),
            (400...599).contains(status), status.rounded(.towardZero) == status {
             throw MonitorError.http(Int(status))
         }
@@ -249,6 +254,9 @@ struct AdditionalClient: Sendable {
               let bytes = encoded.data(using: .utf8),
               let nodes = try? JSONSerialization.jsonObject(with: bytes) as? [Any], !nodes.isEmpty else {
             throw MonitorError.invalidResponse
+        }
+        if let root = nodes[0] as? [String: Any], root["redirect"] != nil, root["q"] == nil {
+            throw AmpDashboardError.redirected
         }
         func field(_ object: Any?, _ key: String) -> Any? {
             guard let reference = number((object as? [String: Any])?[key]),
