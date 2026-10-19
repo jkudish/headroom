@@ -104,16 +104,19 @@ struct AdditionalClient: Sendable {
             let amount = #"([0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)"#
             let agent = capture(#"agent usage \$"# + amount + #" of \$"# + amount + " remaining", in: text)
                 .compactMap { Double($0.replacingOccurrences(of: ",", with: "")) }
-            let orb = capture("orb usage " + amount + "h of " + amount + #"h a1\.small orb hours remaining"#, in: text)
+            let orbFields = capture(#"(?i)\borb\s+usage\s+"# + amount + #"h\s+of\s+"# + amount + #"h\b([^\r\n,()]{0,100})remaining\b"#, in: text)
+            let orb = orbFields.prefix(2)
                 .compactMap { Double($0.replacingOccurrences(of: ",", with: "")) }
+            let orbUnit = orbFields.last?.range(of: #"(?i)^\s+a1\.small\s+orb\s+hours\s+$"#, options: .regularExpression) != nil
+                ? "a1.small hours" : "Orb hours"
             if agent.count == 2 {
                 metrics += [.init(title: "Agent", kind: .quota, value: percent(agent[0], limit: agent[1])),
                             .init(title: "Agent remaining", kind: .balance, value: agent[0], unit: "USD")]
             }
             if orb.count == 2 {
                 metrics += [.init(title: "Orb", kind: .quota, value: percent(orb[0], limit: orb[1])),
-                            .init(title: "Orb remaining", kind: .count, value: orb[0], unit: "a1.small hours"),
-                            .init(title: "Orb allowance", kind: .cap, value: orb[1], unit: "a1.small hours")]
+                            .init(title: "Orb remaining", kind: .count, value: orb[0], unit: orbUnit),
+                            .init(title: "Orb allowance", kind: .cap, value: orb[1], unit: orbUnit)]
             }
             // Legacy percentages are already remaining, not spent dollars or hours.
             let legacy = [#"(?m)^Subscription ([^\r\n:]{1,100}): "#, #"(?m)^Amp ([^\r\n:]{1,100}) Subscription: "#]
@@ -165,26 +168,13 @@ struct AdditionalClient: Sendable {
             }
             if !metrics.contains(where: { $0.title == "Orb" }) {
                 metrics.append(.init(title: "Orb usage", kind: .note, value: nil, detail: orbStatus))
-                if usedAmpCLI {
-                    let hasOrbLabel = text.range(of: #"\borb\b"#, options: [.regularExpression, .caseInsensitive]) != nil
-                    cliStatus = hasOrbLabel ? "succeeded (Orb text present, no parsed meter)" : "succeeded (no Orb text)"
-                    let formats = [
-                        ("usage", #"(?i)\borb\s+usage"#),
-                        ("hours", #"(?i)\borb\s+usage\s+[0-9.,]+h\s+of\s+[0-9.,]+h"#),
-                        ("percent-first", #"(?i)[0-9.]+%\s+orb\s+usage\s+remaining"#),
-                        ("percent-last", #"(?i)\borb\s+usage[^\r\n]*\([0-9.]+%\)"#),
-                        ("small-hours", #"(?i)a1\.small\s+orb\s+hours\s+remaining"#)
-                    ].map { label, pattern in
-                        label + ":" + (text.range(of: pattern, options: .regularExpression) != nil ? "yes" : "no")
-                    }.joined(separator: ", ")
-                    cliStatus += "; " + formats
-                }
                 // Fixed status labels only: never log tokens, response bodies, emails or helper output.
                 Logger(subsystem: "dev.jkudish.usage-monitor-poc", category: "AmpOrb")
                     .notice("CLI: \(cliStatus, privacy: .public); CLI used: \(usedAmpCLI); \(orbStatus, privacy: .public)")
             } else if usedAmpCLI {
+                let validQuota = metrics.contains { $0.title == "Orb" && $0.value?.isFinite == true }
                 Logger(subsystem: "dev.jkudish.usage-monitor-poc", category: "AmpOrb")
-                    .notice("Orb reading available; CLI used: true")
+                    .notice("Orb reading available; valid quota: \(validQuota); CLI used: true")
             }
         case .grok:
             return try await grokSnapshot(data, identity: GrokClient.identity(token: secrets.key, http: http))

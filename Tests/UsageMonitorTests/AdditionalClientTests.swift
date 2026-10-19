@@ -22,7 +22,8 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     #expect(snapshot.metrics.first?.value == 41.23)
 }
 
-@Test func ampKeepsAgentDollarsOrbHoursAndCreditsSeparate() async throws {
+@Test(arguments: ["a1.small", "a1.small-equivalent"])
+func ampKeepsAgentDollarsOrbHoursAndCreditsSeparate(_ orbScale: String) async throws {
     let client = AdditionalClient(http: additionalHTTP(#"""
     {"ok":true,"result":{"displayText":"Signed in as test@example.test (Fixture team)\nAmp Megawatt Tier: agent usage $18.57 of $20 remaining, orb usage 732.8h of 750h a1.small orb hours remaining - period 2026-09-13 to 2026-10-13\nIndividual credits: $31.25 remaining"}}
     """#))
@@ -37,11 +38,12 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     let grouped = try await AdditionalClient(http: ProviderHTTP { request in
         (Data(), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
     }, ampUsage: { _ in
-        "Amp Gigawatt Tier: agent usage $1,234.56 of $2,000 remaining (62%), orb usage 1,275.5h of 8,000h a1.small orb hours remaining (16%)"
+        "Amp Gigawatt Tier: agent usage $1,234.56 of $2,000 remaining (62%), Orb  usage 1,275.5h of 8,000h \(orbScale) orb hours remaining (16%)"
     }).fetch(.init(label: "", provider: .amp), secrets: .init(key: "fixture-amp"))
     #expect(grouped.metrics.first { $0.title == "Agent remaining" }?.value == 1234.56)
     #expect(grouped.metrics.first { $0.title == "Orb remaining" }?.value == 1275.5)
     #expect(grouped.metrics.first { $0.title == "Orb allowance" }?.value == 8000)
+    #expect(grouped.metrics.first { $0.title == "Orb remaining" }?.unit == (orbScale == "a1.small" ? "a1.small hours" : "Orb hours"))
     let orbPercent = try #require(grouped.metrics.first { $0.title == "Orb" }?.value)
     #expect(abs(orbPercent - 15.94375) < 0.000000001)
     #expect(!grouped.metrics.contains { $0.title == "Orb usage" })
@@ -50,6 +52,15 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     #expect(!missingOrb.metrics.contains { $0.kind == .cap && $0.unit == "USD" })
     #expect(missingOrb.metrics.first { $0.title == "Orb usage" }?.detail == "Unavailable — dashboard response not recognized")
     #expect(!missingOrb.metrics.contains { $0.title == "Orb" && $0.value != nil })
+}
+
+@Test func ampDoesNotTreatUsedOrbHoursAsRemaining() async throws {
+    let client = AdditionalClient(http: ProviderHTTP { request in
+        (Data(), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+    }, ampUsage: { _ in "agent usage $34.32 of $600 remaining, orb usage 3h of 8h a1.medium orb hours used" })
+    let result = try await client.fetch(.init(label: "", provider: .amp), secrets: .init(key: "fixture-amp"))
+    #expect(!result.metrics.contains { $0.title == "Orb" })
+    #expect(result.metrics.first { $0.title == "Agent remaining" }?.value == 34.32)
 }
 
 @Test(arguments: [401, 403, 429], [false, true])
