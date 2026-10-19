@@ -162,6 +162,10 @@ struct AdditionalClient: Sendable {
             }
             if !metrics.contains(where: { $0.title == "Orb" }) {
                 metrics.append(.init(title: "Orb usage", kind: .note, value: nil, detail: orbStatus))
+                if usedAmpCLI {
+                    let hasOrbLabel = text.range(of: #"\borb\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+                    cliStatus = hasOrbLabel ? "succeeded (Orb text present, no parsed meter)" : "succeeded (no Orb text)"
+                }
                 // Fixed status labels only: never log tokens, response bodies, emails or helper output.
                 Logger(subsystem: "dev.jkudish.usage-monitor-poc", category: "AmpOrb")
                     .notice("CLI: \(cliStatus, privacy: .public); CLI used: \(usedAmpCLI); \(orbStatus, privacy: .public)")
