@@ -53,7 +53,15 @@ You need **macOS 14 or later on an Apple silicon Mac**. Xcode isn't needed for t
 
 Claude and Codex need their official CLI helpers installed separately for sign-in. Check [Account setup](docs/accounts.md) and [Providers](docs/providers.md) for each service's requirements.
 
-Changing the signing identity or app location can require new Keychain approvals. To try synthetic accounts before signing in, run `open -n "$HOME/Applications/Headroom.app" --args --demo`. Quit that demo instance before opening Headroom normally.
+Changing the signing identity or app location can require new Keychain approvals. To try synthetic accounts before signing in:
+
+```sh
+open -n \
+  "$HOME/Applications/Headroom.app" \
+  --args --demo
+```
+
+Quit that demo instance before opening Headroom normally.
 
 ## Build and try it
 
