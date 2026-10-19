@@ -34,6 +34,17 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     #expect(result.plan == "Megawatt")
     #expect(result.identity == nil) // Display metadata does not invent a stable owner ID.
     #expect(!result.metrics.contains { $0.title == "Provider-reported agent cap" })
+    let grouped = try await AdditionalClient(http: ProviderHTTP { request in
+        (Data(), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+    }, ampUsage: { _ in
+        "Amp Gigawatt Tier: agent usage $1,234.56 of $2,000 remaining (62%), orb usage 1,275.5h of 8,000h a1.small orb hours remaining (16%)"
+    }).fetch(.init(label: "", provider: .amp), secrets: .init(key: "fixture-amp"))
+    #expect(grouped.metrics.first { $0.title == "Agent remaining" }?.value == 1234.56)
+    #expect(grouped.metrics.first { $0.title == "Orb remaining" }?.value == 1275.5)
+    #expect(grouped.metrics.first { $0.title == "Orb allowance" }?.value == 8000)
+    let orbPercent = try #require(grouped.metrics.first { $0.title == "Orb" }?.value)
+    #expect(abs(orbPercent - 15.94375) < 0.000000001)
+    #expect(!grouped.metrics.contains { $0.title == "Orb usage" })
     let missingOrb = try await AdditionalClient(http: additionalHTTP(#"{"ok":true,"result":{"displayText":"agent usage $55.02 of $600 remaining\nIndividual credits: $17 remaining"}}"#))
         .fetch(Account(label: "", provider: .amp), secrets: .init(key: "fixture-amp"))
     #expect(!missingOrb.metrics.contains { $0.kind == .cap && $0.unit == "USD" })

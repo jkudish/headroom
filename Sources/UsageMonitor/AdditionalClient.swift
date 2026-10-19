@@ -101,8 +101,11 @@ struct AdditionalClient: Sendable {
                   let text = result["displayText"] as? String else { throw MonitorError.invalidResponse }
             reportedEmail = capture(#"(?m)^Signed in as ([^\s@()]+@[^\s@()]+)(?: \([^\r\n)]+\))?\s*$"#, in: text).first
             plan = capture(#"(?m)^Amp ([^\r\n:]{1,100}?) Tier:"#, in: text).first
-            let agent = capture(#"agent usage \$([0-9.]+) of \$([0-9.]+) remaining"#, in: text).compactMap(Double.init)
-            let orb = capture(#"orb usage ([0-9.]+)h of ([0-9.]+)h a1\.small orb hours remaining"#, in: text).compactMap(Double.init)
+            let amount = #"([0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)"#
+            let agent = capture(#"agent usage \$"# + amount + #" of \$"# + amount + " remaining", in: text)
+                .compactMap { Double($0.replacingOccurrences(of: ",", with: "")) }
+            let orb = capture("orb usage " + amount + "h of " + amount + #"h a1\.small orb hours remaining"#, in: text)
+                .compactMap { Double($0.replacingOccurrences(of: ",", with: "")) }
             if agent.count == 2 {
                 metrics += [.init(title: "Agent", kind: .quota, value: percent(agent[0], limit: agent[1])),
                             .init(title: "Agent remaining", kind: .balance, value: agent[0], unit: "USD")]
@@ -169,6 +172,9 @@ struct AdditionalClient: Sendable {
                 // Fixed status labels only: never log tokens, response bodies, emails or helper output.
                 Logger(subsystem: "dev.jkudish.usage-monitor-poc", category: "AmpOrb")
                     .notice("CLI: \(cliStatus, privacy: .public); CLI used: \(usedAmpCLI); \(orbStatus, privacy: .public)")
+            } else if usedAmpCLI {
+                Logger(subsystem: "dev.jkudish.usage-monitor-poc", category: "AmpOrb")
+                    .notice("Orb reading available; CLI used: true")
             }
         case .grok:
             return try await grokSnapshot(data, identity: GrokClient.identity(token: secrets.key, http: http))
