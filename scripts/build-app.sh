@@ -23,6 +23,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>UsageMonitor</string>
 <key>CFBundleIdentifier</key><string>dev.jkudish.usage-monitor-poc</string>
+<key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleName</key><string>Headroom</string>
 <key>CFBundleDisplayName</key><string>Headroom</string>
 <key>CFBundleIconFile</key><string>Headroom.icns</string>
