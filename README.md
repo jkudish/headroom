@@ -84,4 +84,8 @@ Headroom stores account data on your Mac and contacts providers for readings and
 - [Report a bug or request a feature](https://github.com/jkudish/headroom/issues)
 - [Contribute](CONTRIBUTING.md) · [Security](SECURITY.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
+## Sponsoring
+
+If Headroom helps your work, consider [sponsoring its development](https://github.com/sponsors/jkudish).
+
 Made by [Joey Kudish](https://github.com/jkudish). Headroom's code is [MIT-licensed](LICENSE); provider marks belong to their respective owners.
