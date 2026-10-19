@@ -1,111 +1,87 @@
-# Headroom
+<p align="center">
+  <img src="docs/images/headroom.png" width="112" height="112" alt="Headroom app icon">
+</p>
 
-Local macOS 14+ menu-bar app, written in Swift 6 with AppKit and SwiftUI. Connect multiple independent subscription and API accounts, including accounts that are not signed into your local CLIs. A native macOS menu groups accounts by provider, two equal columns within a 420-point content width; a single Claude or Codex account uses the full row. AppKit handles overflow. Emails wrap, with plans beneath them. One clickable menu-bar area combines the visible accounts' logos and up to two quota readings (session then weekly), or their available balance. Missing readings show a dash, not zero. Hover tooltips are disabled; the accessibility label still identifies accounts and meters. The resizable account window uses a System Settings-style sidebar: select a service to see its accounts, stats and controls in side-by-side panels. A single account uses the full width; additional accounts use at most two columns and stack when the detail pane is narrower than 640 points. It opens at 920×720 points, with a 740×480 minimum; long lists scroll independently.
+<h1 align="center">Headroom</h1>
 
-## Run
+<p align="center">Usage and limits for your AI accounts, in the macOS menu bar.</p>
 
-Building requires Xcode 26+ with Icon Composer asset support. Subscription sign-in also requires the relevant official CLI: Claude Code or Codex, installed at `~/.local/bin/`, `/opt/homebrew/bin/`, or `/usr/local/bin/`. Grok browser sign-in requires the official Grok CLI at `~/.grok/bin/grok` or in Homebrew. Manual key/token connections do not need a CLI. Helper contracts were checked with Claude Code 2.1.291 and Codex 0.153.4.
+<p align="center">
+  <a href="#build-and-try-it">Get started</a> ·
+  <a href="docs/providers.md">Providers</a> ·
+  <a href="docs/accounts.md">Account setup</a> ·
+  <a href="docs/local-mcp.md">MCP</a> ·
+  <a href="LICENSE">MIT license</a>
+</p>
+
+Connect multiple Claude and Codex accounts, even when they aren't signed in to your local CLIs. Keep subscription limits, reset times, and API balances together without opening each dashboard.
+
+Headroom is a native SwiftUI/AppKit app. It's free and open source. **Build from source for now; there is no packaged, notarized release.**
+
+## A look at the app
+
+These screenshots use the built-in demo. All accounts and readings are synthetic.
+
+### Menu bar
+
+<p align="center">
+  <a href="docs/images/menu-bar.png"><img src="docs/images/menu-bar.png" width="420" alt="Headroom menu with synthetic Claude, Codex, Amp, and OpenRouter accounts"></a>
+</p>
+
+### Account settings
+
+![Headroom settings with a service sidebar and two synthetic Claude accounts](docs/images/account-settings.png)
+
+## What it does
+
+- Connect several accounts per provider, with separate credentials for each.
+- Pin account logos and readings to the menu bar. A native menu groups all connected accounts by service.
+- Compare accounts side by side in a resizable settings window.
+- Read subscription quotas, API spend, and credit balances where providers expose them. Missing readings stay unavailable.
+- Warn before unused Claude or Codex reset credits expire. Codex reset use requires confirmation.
+- Let same-Mac agents query cached usage through an optional, read-only [MCP server](docs/local-mcp.md).
+
+Claude, Codex, Grok / SuperGrok, Grok Bot, Amp, and z.ai Coding Plan have connectors, alongside OpenRouter and API billing services. Credential requirements and coverage vary. See the [provider reference](docs/providers.md) before creating a key.
+
+## Build and try it
+
+You need macOS 14 or later and **Xcode 26 or later**, selected with `xcode-select`. The app uses Swift 6 and Icon Composer assets. The build targets your Mac's architecture; a universal binary isn't produced.
+
+The following commands build locally with an ad-hoc signature. They don't install an app. Demo mode uses temporary fixtures, with no sign-in, provider requests, or real-account access.
 
 ```sh
+git clone https://github.com/jkudish/headroom.git
+cd headroom
 swift test
-bash scripts/build-app.sh
-open .build/Headroom.app --args --window
-```
-
-The app appears in the Dock and Command-Tab while its account window is open; closing it returns to menu-bar-only mode. To inspect multiple providers with fixture data and no authentication or live requests:
-
-```sh
+HEADROOM_SIGNING_IDENTITY=- bash scripts/build-app.sh
 open -n .build/Headroom.app --args --demo
 ```
 
-The build is Apple Silicon, signed with Joachim Kudish's personal Apple Development certificate (team `K7RS6S7JX2`), and **not notarized**. The build script requires that certificate and fails rather than falling back to an ad-hoc identity. It packages the monochrome glossy icon at standard macOS sizes. The existing bundle identifier, account storage and Keychain identities remain unchanged by the rename from Usage Monitor. The script does not install or replace an app.
+You should see a menu-bar item and an account window with demo accounts. Quit that demo instance before opening the app for normal use:
 
-## Connect accounts
+```sh
+open .build/Headroom.app --args --window
+```
 
-1. Choose a provider from **+ Add account…** in the menu, or select a service in the account window's sidebar and choose **Add account**.
-2. For Claude or Codex, open the generated link in the browser profile for the account you want. The official helper owns token exchange. Claude may ask you to paste an authorization code into the app. Codex shows a device code: enter it on OpenAI's page, then wait for browser approval. Enable device code authorization in ChatGPT Security settings if required.
-3. For other connectors, enter a separate key or token in the native connection form. Check the required credential type below. Do not paste codes, tokens, cookies, or passwords into an agent chat.
-4. Ordinary refreshes disable both legacy-Keychain interaction and `LAContext` authentication UI. Blocked access stays in the app instead of requesting permission repeatedly. Click **Allow Keychain access** for that connection; **Always Allow** permits later checks. After moving from an ad-hoc build to the personal signing certificate, each existing entry may need one new approval. Explicit saves/removals may also request access. Do not reset the login Keychain or approve unrelated entries.
-5. Repeat for another account. Headings use email when returned, otherwise a provider account ID or a new-account placeholder. OpenRouter shows **API key** or **Wallet** because its key API does not return an account name or email. Custom names are no longer requested or displayed; legacy labels remain in storage. **Show in menu bar** toggles each account's bar reading without hiding it from the dropdown. All-hidden still leaves a clickable gauge.
-6. Compare each reading with its provider dashboard. Quit/reopen and refresh again to check persistence. Use **Reconnect…** for expired credentials. To change the selected identity, remove that connection and add a new one.
+Choose **Add account** in the service sidebar. Claude and Codex use their official CLI helpers for independent browser sign-in; those helpers must be installed separately. API connectors use the credential type listed in [Providers](docs/providers.md). Existing CLI logins and browser cookies aren't imported.
 
-For the thirteen API services listed below, **Find a saved key → Scan** reads only the selected `~/.env` and/or app-inherited environment. Opening the form does not scan. Candidates show variable/source names, masked values and any detected report mode or scope; **Add** saves only the chosen candidate, or **Update** replaces credentials for the selected connection without changing its report options. Detected report options take precedence over the manual form controls. Nothing is imported automatically. The app never runs bash/zsh startup files; launching it from Finder may not inherit your terminal's exports. File scanning accepts bounded literal dotenv assignments, not substitutions, shell blocks or multiline values, and refuses symlinks and nonregular files. An unavailable file does not hide valid inherited candidates.
+For a local installation, quit Headroom, then copy `.build/Headroom.app` to `~/Applications/`. Keep a single installed copy. Changing the signing identity or app location can require new Keychain approvals. See [Building and contributing](CONTRIBUTING.md).
 
-Discovery covers OpenRouter, SearchAPI, DataForSEO, Firecrawl, OpenAI API, Anthropic API, xAI API, SerpAPI, Tavily, Jina AI, Parallel, Valyu and You.com. Ordinary inference keys for OpenAI/Anthropic/xAI/Parallel are shown but cannot be added to billing connectors; use explicit admin/management/account-token variables instead. OpenRouter ordinary keys select key-level reporting; management-key variables select the wallet. DataForSEO requires a login/password pair from the same source. A matching variable name is not proof of credential validity, account ownership or billing permissions.
+## Before you connect accounts
 
-## Connector reference
+Some connectors use private interfaces and can break when providers change them. Implemented support does not mean every provider has been verified with a live account. In particular, Amp's supplemental Orb query and Grok sign-in need further live verification.
 
-These are implemented reads, not a claim of live verification for every provider. Subscription quotas, wallet balances, API spend, and spending caps stay separate. Missing information is unavailable, never a fabricated zero or percentage.
+Official helpers can request broad account permissions. Headroom is not a provider-approved third-party OAuth integration. Review the [credential and security boundaries](SECURITY.md) before signing in.
 
-| Connection | Credential | Reported information and limits |
-|---|---|---|
-| Claude | Independent official-helper sign-in | 5-hour/weekly remaining and reset; current profile tier/family overrides cached helper plan; optional saved resets and promotional cloud-credit USD balance/expiry; extra-usage monthly spend/cap, not prepaid credits |
-| Codex | Independent official-helper device sign-in; Copy code button | Returned plan (Pro 100/200/500), quota windows, reset, wallet credits and individual credit allowance. Supplemental reset inventory/details and confirmed selected-credit redemption. Credits are not assumed to be USD or raw tokens. Identity binds a human and selected workspace |
-| z.ai Coding Plan | Coding Plan API key; Global or China region | Returned quota types, periods, and resets; no wallet balance or established API-key account-email lookup |
-| OpenRouter wallet | Management key | Purchased-minus-used wallet USD credits |
-| OpenRouter key | Ordinary API key; select key report | Key spend/caps, not wallet balance |
-| OpenAI API | Organization Admin key; optional organization ID | Fully paginated UTC month-to-date API spend; no wallet balance |
-| Anthropic API | Organization `sk-ant-admin` key | Fully paginated UTC month-to-date API spend; unavailable for individual accounts; no wallet balance |
-| xAI API | Team-scoped Management API key with billing read access | Validated team's prepaid API balance; no SuperGrok quota, promotional credits, or API spend |
-| Amp | Account access token | Official `amp usage` with only the selected `sgamp_` token and private home, then private balance HTTP fallback. Experimental dashboard settings query supplies separate Agent/Orb percentages when accepted. Orb hours, Agent dollars and wallet credits keep their own units; missing Orb usage stays unavailable |
-| Grok / SuperGrok | Official-helper browser sign-in, or manually supplied access token | Isolated helper owns OAuth and refresh rotation; billing and server-verified identity use only that profile. Manual tokens still need renewal. No independent 5-hour/weekly windows are invented |
-| Grok Bot | Private sign-in window (experimental), or session Cookie header | Cursor-backed sign-in, separate from SuperGrok. Verifies `/api/auth/me` identity before reading Grok Bot allowance/trial. Trial expiry is not a recurring quota reset. Embedded SSO may be blocked; manual entry remains available |
-| SearchAPI | API key | Monthly searches, remaining search credits, allowance, reset |
-| DataForSEO | API login and API password from API Access | USD balance; all-time deposits-minus-balance as credits used, not monthly spend. The account read is free |
-| Firecrawl | Team API key | Remaining credits, plan cap, billing period. Purchased/coupon credits may exceed the plan cap |
-| SerpAPI | API key | Monthly usage, allowance, remaining searches. The free account API requires its key in the query; URLs are not logged |
-| Tavily | API key | Plan credit usage/allowance and separate key usage/cap |
-| You.com | API key with account balance access | Individual/organization credit balance |
-| Parallel | Account API OAuth access token, not a search key | Prepaid USD balance and pending charges separately; invoice accounts are labelled postpaid |
-| Valyu | Key with `billing:read` | Organization credits and pay-as-you-go spend in USD |
-| Jina AI | API key | Experimental root-response token balance; changed format fails visibly |
+Headroom stores account data on your Mac and contacts providers for readings and authentication. It has no hosted Headroom backend. It doesn't enforce spending limits or replace provider billing dashboards.
 
-Exa is paused and is not offered for new connections or credential discovery. Saved Exa accounts remain available for removal or dashboard access, but do not poll. Existing credentials are not deleted automatically.
+## Help and contributing
 
-Brave, Perplexity, Gemini, and Kagi have no implemented billing connector and are no longer offered in either connection menu. Legacy provider identifiers remain decodable so an update does not destroy saved data. Librarium model variants share their billing family; they are not separate balances.
+- [Connect accounts and troubleshoot access](docs/accounts.md)
+- [Provider coverage and credential types](docs/providers.md)
+- [Reset credits and expiry alerts](docs/reset-credits.md)
+- [Local MCP setup](docs/local-mcp.md)
+- [Report a bug or request a feature](https://github.com/jkudish/headroom/issues)
+- [Contribute](CONTRIBUTING.md) · [Security](SECURITY.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
-Grok Bot keeps its legacy `cursor` storage identifier so saved connections survive the display-name change. Its icon comes from the official installed Grok Bot app.
-
-## Reset expiry alerts
-
-Enable **Reset expiry alerts** on each Claude or Codex account and allow notifications. Headroom schedules reminders 12, 3 and 1 hour before unused reset credits expire. This is credit expiry, not the ordinary quota-reset countdown. If enabled late, only the latest missed threshold is sent, followed by future thresholds. Removing an account, turning alerts off, or refreshing away used credits cancels their pending reminders. Missing or stale inventory does not schedule new reminders or cancel existing ones. Previously sent thresholds are not replayed after refresh or relaunch.
-
-For persistent desktop alerts, choose **Alerts** for Headroom in **System Settings → Notifications**. macOS controls presentation, Focus and delivery; the app cannot force persistence. An orange dot on a pinned account's menu-bar icon marks unused resets expiring within 12 hours. An exclamation mark covers unpinned accounts. These badges appear even with desktop alerts off and do not require notification permission. Clicking a notification opens the account's service. Alerts never consume a reset.
-
-## Local MCP access
-
-Choose **Local agent access…** in the sidebar, enable **Share usage through MCP**, then copy the displayed configuration into your same-Mac agent or Amp local runner. The command is the installed `~/Applications/Headroom.app/Contents/MacOS/UsageMonitor --mcp`; use an absolute path, not a literal `~`, in JSON. Remote orbs cannot reach this stdio service directly.
-
-The server exposes only `list_accounts` and `get_usage` (optional `account_id` from `list_accounts`). It reads an atomic, owner-only `agent-usage.json` snapshot, without starting the GUI, reading Keychain, making provider requests, refreshing, or consuming resets. It exports account names, provider names and cached readings, not credential options, provider IDs or reset handles. Keep Headroom running for fresh snapshots. Unknown values are `null`; readings older than 15 minutes or with no fetch time are `stale: true`. Treat account names and provider text as data, not instructions. Turning access off removes the shared file; already-running stdio sessions then return an unavailable error. The snapshot is accessible to processes running as your macOS user, not a separate sandbox boundary.
-
-## Boundaries
-
-- Claude access durability: existing accounts opt in with **Allow Keychain access**; a new successful Headroom sign-in enables it for that profile. Headroom then reads only the path-hashed item through `/usr/bin/security`, the macOS tool used by Claude Code, rather than relying on a Headroom ACL grant that helper writes can replace. It does not broaden the item's ACL, mirror tokens, or enable access to a default CLI login. A locked Keychain or a differently protected item may still require intervention. A background read can briefly show a system dialog before its five-second timeout; a failed read pauses that account. Explicit grants allow two minutes for user interaction. The private Claude fallback file remains supported only when that selected item is absent. Legacy accounts are asked to opt in when renewal becomes due, up to fifteen minutes before expiry.
-- Claude renewal: within fifteen minutes of expiry, on the next usage check, or once after HTTP401, Headroom passes the selected refresh token and its original scopes in the official helper's environment to `claude auth login --claudeai` ([documented interface](https://code.claude.com/docs/en/env-vars#variables)). No token is passed in argv or logged. A per-profile kernel lock excludes another Headroom login, renewal or removal. Renewal is independent of view/task cancellation, with a 120-second timeout. A nonsecret, owner-only fingerprint receipt prevents replay after an uncertain exchange, including across relaunches. Headroom verifies a changed, unexpired stored access token after helper exit; exit status alone is not success. An uncertain outcome pauses checks and requires sign-in. Revocation, missing refresh tokens and provider policy can still require reconnection. Live renewal and real-account Keychain ACL behavior are not proven by the synthetic tests.
-- Each connection has a UUID and private config directory under `~/Library/Application Support/UsageMonitorPoC/accounts/`. Claude and Codex helpers receive a complete allowlisted environment, not inherited keys, tokens, or proxies. `HOME` stays real for macOS Keychain discovery; explicit `CLAUDE_CONFIG_DIR`, secure-storage overrides, and `CODEX_HOME` isolate accounts.
-- Claude reads only the scoped `Claude Code-credentials-<path hash>` Keychain item or its private `.credentials.json` fallback. Codex and Grok read only the selected private `auth.json`. Grok receives private `HOME`, `GROK_HOME` and `GROK_AUTH_PATH`; its helper alone rotates refresh tokens. The app never imports default CLI logins or browser cookies. Grok Bot uses a fresh nonpersistent WebKit store and saves only its explicitly completed session in the selected Keychain entry. Manual cookies are used only for their selected connector.
-- Entered API keys/tokens stay in root/UUID-scoped Keychain entries, not metadata JSON. Removal affects only the selected app-owned profile and entries, not daily-driver credentials.
-- When a provider returns identity, the connection binds it and rejects a different identity or a later missing identity. Codex claims are decoded metadata, not locally signature-verified; the provider validates the bearer. API reads without stable identity cannot prove that a pasted key still belongs to the same person.
-- Provider requests use ephemeral sessions, fixed HTTPS hosts, no redirects, timeouts, and safe errors. No inference, paid search or purchase is performed. The only finite-resource write is explicitly confirmed Codex reset redemption; refresh and sign-in never redeem credits.
-- Claude, Codex, Amp, Grok, Cursor, and z.ai usage interfaces are private or reference-backed. Jina balance text is experimental. They can change. This is **not an approved third-party Claude OAuth integration**; provider policy remains a risk.
-- Sign-in requests the helper's normal Claude Code permissions. It is not a read-only OAuth grant, even though this app only reads usage.
-- Usage checks run at launch and after connection. Claude checks five minutes after each success; opening the menu does not shorten this interval. Other providers check after one minute, or when opening the menu with readings at least 30 seconds old. Claude HTTP429 responses start an account-specific cooldown of 10–30 minutes, increasing with consecutive failures. Earlier network failures can make the first rate-limit cooldown longer than ten minutes. The account window shows the retry time and disables Refresh until then; other callers also respect the cooldown. These are conservative app defaults, not provider-published limits or `Retry-After` handling. Other failures back off per account (2, 4, 8, 16, then at most 30 minutes). Cooldowns live in memory: quitting/relaunching or reconnecting clears them. Authentication, scope, identity and Keychain-access failures pause that account until an explicit retry/reconnect. Checks do not overlap another read or reset for the same account, and automatic checks pause during sign-in. Manual refresh remains available outside a Claude rate-limit cooldown. Claude and Grok renewal use their selected official helpers; Codex and manual tokens still need reconnection when expired. No usage history is kept. Model-specific Claude weekly windows are not shown.
-- Removal deletes only the selected app profile and scoped credentials. It does not revoke tokens remotely.
-
-The interface uses a native AppKit `NSMenu` with transparent hosted account rows, matching CodexBar's presentation mechanism rather than a fixed-height popover. Menus, sheets, windows, and standard controls own their appearance; no glass/effect background is injected. This follows Apple's [Liquid Glass adoption guidance](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass). Unboxed accounts use thin dividers, with no account switcher or local-log history. Error paragraphs use readable primary text beside a warning icon. Zero remaining is red; above zero through 10% is orange. Reset dates use the local timezone and omit the year. Every provider, including retained legacy identifiers, has a bundled logo. Codex uses its terminal-in-rosette product mark ([SVG copy from theSVG](https://thesvg.org/icon/codex-openai)); OpenAI API keeps OpenAI's [Blossom mark](https://commons.wikimedia.org/wiki/File:OpenAI_logo_2025_(symbol).svg). Claude, Amp and the other providers use marks from their official sites or brand assets, including [You.com's brand kit](https://ydc-brand-guidelines.webflow.io/). Monochrome Codex, OpenAI, Anthropic, xAI, Grok, Amp and Valyu marks use transparent masks and adapt to the appearance; colored marks keep their colors. Anthropic, xAI, Grok and Firecrawl backgrounds are removed from their source artwork rather than drawn as tiles. Logos load locally, without requests to logo services. These marks identify their providers and do not imply endorsement.
-
-Codex **Available resets** comes from the provider; details describe only listed records. An unavailable supplemental endpoint does not hide valid quotas. Choose **Use reset…** beneath the account in the menu or account window (also available in Account actions), select **Use reset…**, and confirm the account and credit in the modal (Cancel is the default). The app rechecks the bearer human/workspace and live inventory before POSTing to the reference-backed `wham/rate-limit-reset-credits/consume` endpoint. It persists a per-account/credit request UUID before sending, reuses it after an uncertain response or restart, and never automatically retries or falls back to another account/credit. An uncertain result needs a refresh before deciding what to do. No real reset was consumed in development or verification; redemption tests use injected fixture HTTP only. Provider contracts can change.
-
-Claude **Available resets** counts saved resets across active, unpaused grants, even if a reset cannot be used until a limit is reached. It shows the next known grant expiry, not a recurring refill date. This display is read-only: no Claude redemption handles or reset action are added. **Cloud credits** are promotional cloud-session dollars, separate from Extra usage monthly spending/cap and the prepaid Extra usage wallet. Expired or locked cloud credits show unavailable, not a spendable balance. No OAuth endpoint for the prepaid wallet is established, so its balance is not guessed or fetched with browser cookies. These optional fields follow [CodexBar's pinned reference](https://github.com/steipete/CodexBar/tree/2e19c9276bd43286b28b662804825387ac8b0e17/Sources/CodexBarCore/Providers/Claude). The app requests `usage?cedar_ember=1` with the supported helper-shaped User-Agent; HTTP400/403 falls back once to ordinary usage with the same bearer. Malformed optional inventory/credits are omitted without hiding ordinary quotas or spending. Verification uses synthetic responses, not live account balances or genuine resets.
-
-Claude snapshots retain optional grant/credit time bounds and derive current availability locally. Open summaries reevaluate once a second when those bounds exist; the menu bar schedules a one-shot display update at the next known boundary. These are display updates, not provider polling. Passing a known expiry removes those resets from the count and hides expired dollars, without changing the last successful fetch time or ordinary spending/quotas. Reopening reads the same snapshot at the current time.
-
-The menu captures account readings when it opens. A single account spans the full menu width for every provider; multiple accounts use two columns. The first provider heading has a three-dot menu for Add account, Refresh all, and Open account window; these actions also remain at the bottom. Background checks update the menu-bar readings and open account window, but new fetched data appear in the dropdown on reopening. Relative age and known Claude grant/credit expiry are local display updates. Compact reset labels omit weekdays; full dates remain in hover help and the reset details sheet. Compact supplemental descriptions use at most two lines, with full text in help.
-
-Amp's current public frontend uses the SvelteKit query `rjke8/getAccountSettingsPanelData` for `user.email`, subscription metadata, and `subscriptionUsageBuckets.general/orb.percentRemaining`. This private GET may change or reject access tokens; no browser cookies are imported. A bounded reference-table reader decodes only those fields, never executes JavaScript, and leaves unsupported fields unavailable. Reset dates require an active, future subscription that renews under the dashboard's cancellation/free-renewal and payer conditions; they occur two hours before `periodEndAt`. Unknown or nonrenewing states omit the reset without discarding quotas, email, tier, or wallet credits. Each valid dashboard quota replaces only its matching CLI meter; missing or invalid dashboard fields never discard valid CLI readings. If Orb is still missing, its note distinguishes a rejected request, an unrecognized response, and a response without an Orb reading. The `AmpOrb` macOS log category records fixed failure labels only, never credentials, account details or response bodies. All providers display quota percentages rounded down to whole numbers, with `<1%` for positive amounts below one percent. Stored values, bars, balances and credit amounts retain their precision. This query is source-backed and fixture-tested, not yet live-authenticated in this app.
-
-The Amp balance-text fallback accepts an organization suffix after the signed-in email and extracts the tier name. It keeps Agent dollars, Orb hours, and wallet credits separate; legacy subscription output supplies independent remaining percentages without invented dollar/hour balances or reset dates. This parsing follows [CodexBar's pinned Amp reference](https://github.com/steipete/CodexBar/blob/3bfbf4a51d3af6c7307d5aa189e85b3e94390fe8/Sources/CodexBarCore/Providers/Amp/AmpUsageParser.swift). Display text does not establish an account ID. The current browser query uses same-origin session authentication; bearer acceptance and the exact authenticated payload remain unverified.
-
-An uncertain reset invalidates the displayed usage and inventory. No reset can be attempted until this account refreshes successfully; failed refreshes and restarts do not restore stale eligibility. The original request UUID remains saved. If the credit disappeared or became redeemed, replay is blocked: this app does not guarantee reconciliation of a lost successful response. Inspect the refreshed limits before selecting another credit.
-
-The automated suite covers selected-account credentials, identity changes, persistence, units, incomplete cost pagination, missing fields, over-plan credits, reminder planning, MCP redaction/staleness, and safe errors. Grok integration follows the [official helper source](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8). It uses the helper's normal broad permissions, not a read-only OAuth grant. Grok Bot embedded SSO, Grok two-account login/renewal, real notification delivery, new-provider authentication, and dashboard comparisons still need interactive verification. No real reset was consumed in development.
+Made by [Joey Kudish](https://github.com/jkudish). Headroom's code is [MIT-licensed](LICENSE); provider marks belong to their respective owners.

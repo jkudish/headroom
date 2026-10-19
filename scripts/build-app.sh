@@ -6,8 +6,9 @@ BIN="$(swift build -c release --show-bin-path)"
 APP=".build/Headroom.app"
 BUILD_VERSION="$(git rev-list --count HEAD)"
 # Personal Apple Development: Joachim Kudish (XZYM397R6X), team K7RS6S7JX2.
-# Fail if this certificate is unavailable; never silently change to an ad-hoc identity.
-SIGNING_IDENTITY="2368502C79FF15509186BCC97AD27B3D7A2D1B26"
+# Override explicitly for another certificate or '-' for a local ad-hoc build.
+# Fail if the selected identity is unavailable; never silently fall back.
+SIGNING_IDENTITY="${HEADROOM_SIGNING_IDENTITY-2368502C79FF15509186BCC97AD27B3D7A2D1B26}"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/UsageMonitor" "$APP/Contents/MacOS/UsageMonitor"
 ditto "$BIN/UsageMonitor_UsageMonitor.bundle" "$APP/Contents/Resources/UsageMonitor_UsageMonitor.bundle"
@@ -35,4 +36,4 @@ PLIST
 codesign --force --sign "$SIGNING_IDENTITY" "$APP/Contents/Resources/UsageMonitor_UsageMonitor.bundle"
 codesign --force --sign "$SIGNING_IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
-echo "Built $APP (personal Apple Development signature; not notarized)."
+echo "Built $APP (signing identity: $SIGNING_IDENTITY; not notarized)."
