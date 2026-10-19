@@ -318,10 +318,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if monitor.entries.isEmpty {
             menu.addItem(NSMenuItem(title: "No accounts connected", action: nil, keyEquivalent: ""))
         }
+        let quickActions = NSMenu()
+        quickActions.autoenablesItems = false
+        quickActions.addItem(NSMenuItem()) // Pull-down buttons reserve their first item for the label.
+        addGlobalActions(to: quickActions)
+        let firstProvider = Provider.allCases.first { provider in monitor.entries.contains { $0.account.provider == provider } }
         for provider in Provider.allCases {
             let entries = monitor.entries.filter { $0.account.provider == provider }
             guard !entries.isEmpty else { continue }
-            let content = NSHostingView(rootView: ProviderAccountGrid(entries: entries) { [weak self] entry in
+            let content = NSHostingView(rootView: ProviderAccountGrid(entries: entries, actions: provider == firstProvider ? quickActions : nil) { [weak self] entry in
                 VStack(alignment: .leading, spacing: 8) {
                     AccountSummaryView(entry: entry, compact: true)
                     if provider == .codex {
@@ -361,6 +366,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             menu.addItem(actions)
             menu.addItem(.separator())
         }
+        addGlobalActions(to: menu)
+        menu.addItem(.separator())
+        addItem("Quit", to: menu, action: #selector(quit))
+    }
+
+    private func addGlobalActions(to menu: NSMenu) {
+        guard let monitor else { return }
         let connect = NSMenuItem(title: "Add account…", action: nil, keyEquivalent: "")
         connect.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Add account")
         let providers = NSMenu()
@@ -374,8 +386,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         addItem("Refresh all", to: menu, action: #selector(refreshAll),
                 enabled: !demo && login.accountID == nil && !monitor.entries.isEmpty && !monitor.entries.contains(where: \.refreshing))
         addItem(login.accountID == nil ? "Open account window…" : "Continue sign-in…", to: menu, action: #selector(showAccountWindow))
-        menu.addItem(.separator())
-        addItem("Quit", to: menu, action: #selector(quit))
     }
 
     private func addItem(_ title: String, to menu: NSMenu, action: Selector,

@@ -37,8 +37,41 @@ private func additionalHTTP(_ body: String) -> ProviderHTTP {
     let missingOrb = try await AdditionalClient(http: additionalHTTP(#"{"ok":true,"result":{"displayText":"agent usage $55.02 of $600 remaining\nIndividual credits: $17 remaining"}}"#))
         .fetch(Account(label: "", provider: .amp), secrets: .init(key: "fixture-amp"))
     #expect(!missingOrb.metrics.contains { $0.kind == .cap && $0.unit == "USD" })
-    #expect(missingOrb.metrics.first { $0.title == "Orb usage" }?.detail == "Unavailable — not returned by Amp")
+    #expect(missingOrb.metrics.first { $0.title == "Orb usage" }?.detail == "Unavailable — dashboard response not recognized")
     #expect(!missingOrb.metrics.contains { $0.title == "Orb" && $0.value != nil })
+}
+
+@Test(arguments: [401, 403, 429])
+func ampDashboardErrorsExplainMissingOrbWithoutDiscardingAgentOrExposingResponseText(_ status: Int) async throws {
+    let client = AdditionalClient(http: ProviderHTTP { request in
+        let panel = request.url?.path.contains("/remote/") == true
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer selected-amp")
+        #expect(request.value(forHTTPHeaderField: "Cookie") == nil)
+        let body = panel ? """
+            {"type":"error","error":{"status":\(status),"message":"private-provider-detail"}}
+            """ : #"{"ok":true,"result":{"displayText":"agent usage $34.32 of $600 remaining"}}"#
+        return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    })
+    let result = try await client.fetch(.init(label: "", provider: .amp), secrets: .init(key: "selected-amp"))
+    #expect(result.metrics.first { $0.title == "Agent remaining" }?.value == 34.32)
+    #expect(result.metrics.first { $0.title == "Orb usage" }?.detail == "Unavailable — dashboard request failed (HTTP \(status))")
+    #expect(!result.metrics.contains { ($0.detail ?? "").contains("private-provider-detail") })
+}
+
+@Test func ampPartialDashboardDoesNotReplaceAWorkingCLIOrbReadingWithUnknown() async throws {
+    let panel = #"[{"q":1},{"rjke8/getAccountSettingsPanelData/":2},{"v":3},{"user":4,"subscriptionUsageBuckets":6},{"email":5},"amp@example.test",{"general":7},{"percentRemaining":8},31]"#
+    let encoded = try JSONSerialization.data(withJSONObject: ["type": "result", "data": panel])
+    let client = AdditionalClient(http: ProviderHTTP { request in
+        (encoded, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }, ampUsage: { _ in
+        "Amp Gigawatt Tier: agent usage $34.32 of $600 remaining, orb usage 72h of 800h a1.small orb hours remaining"
+    })
+    let result = try await client.fetch(.init(label: "", provider: .amp), secrets: .init(key: "selected-amp"))
+    #expect(result.metrics.first { $0.title == "Agent" }?.value == 31)
+    #expect(result.metrics.first { $0.title == "Agent remaining" } == nil)
+    #expect(result.metrics.first { $0.title == "Orb" }?.value == 9)
+    #expect(result.metrics.first { $0.title == "Orb remaining" }?.value == 72)
+    #expect(!result.metrics.contains { $0.title == "Orb usage" })
 }
 
 @Test(arguments: ["Subscription Gigawatt:", "Amp Gigawatt Subscription:"])

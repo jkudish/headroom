@@ -193,6 +193,7 @@ struct AccountSummaryView: View {
 
 struct ProviderAccountGrid<Content: View>: View {
     let entries: [AccountEntry]
+    var actions: NSMenu? = nil
     @ViewBuilder var content: (AccountEntry) -> Content
 
     var body: some View {
@@ -204,6 +205,10 @@ struct ProviderAccountGrid<Content: View>: View {
                     if entries.count > 1 {
                         Text("\(entries.count) accounts").font(.caption).foregroundStyle(.secondary)
                     }
+                    Spacer(minLength: 0)
+                    if let actions {
+                        MenuActionsButton(menu: actions).frame(width: 24, height: 24)
+                    }
                 }
             }
             ForEach(Array(stride(from: 0, to: entries.count, by: 2)), id: \.self) { start in
@@ -211,13 +216,31 @@ struct ProviderAccountGrid<Content: View>: View {
                     content(entries[start]).frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
                     if start + 1 < entries.count {
                         content(entries[start + 1]).frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
-                    } else if entries.count != 1 || !entries[start].account.provider.usesHelper {
+                    } else if entries.count != 1 {
                         Color.clear.frame(minWidth: 0, maxWidth: .infinity, maxHeight: 1)
                     }
                 }
                 if start + 2 < entries.count { Divider() }
             }
         }
+    }
+}
+
+private struct MenuActionsButton: NSViewRepresentable {
+    let menu: NSMenu
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: true)
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        (button.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
+        button.setAccessibilityLabel("Headroom actions")
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        menu.items.first?.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "Headroom actions")
+        button.menu = menu
     }
 }
 

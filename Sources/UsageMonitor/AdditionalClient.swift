@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 struct AdditionalClient: Sendable {
     var http: ProviderHTTP = ProviderHTTP()
@@ -36,9 +37,15 @@ struct AdditionalClient: Sendable {
         }
         let data: Data
         var usedAmpCLI = false
+        var ampCLIStatus = "not configured"
         switch account.provider {
         case .amp:
-            if let ampUsage, let text = try? await ampUsage(secrets.key) {
+            var output: String?
+            if let ampUsage {
+                do { output = try await ampUsage(secrets.key); ampCLIStatus = "succeeded" }
+                catch { ampCLIStatus = ampFailure(error) }
+            }
+            if let text = output {
                 data = try JSONSerialization.data(withJSONObject: ["ok": true, "result": ["displayText": text]])
                 usedAmpCLI = true
             } else {
@@ -124,18 +131,35 @@ struct AdditionalClient: Sendable {
                 if usedAmpCLI { return try await AdditionalClient(http: http).fetch(account, secrets: secrets) }
                 throw MonitorError.invalidResponse
             }
-            if !metrics.contains(where: { $0.title == "Agent" }) { metrics.append(.init(title: "Agent allowance", kind: .note, value: nil, detail: "Not reported by this plan")) }
-            if !metrics.contains(where: { $0.title == "Orb" }) { metrics.append(.init(title: "Orb usage", kind: .note, value: nil, detail: "Unavailable — not returned by Amp")) }
             // Amp's own Account panel has separate subscription buckets. The CLI's
             // dollar allowance is not assumed to be the same meter as that panel.
-            if let data = try? await request("https://ampcode.com/_app/remote/rjke8/getAccountSettingsPanelData", secrets: secrets),
-               let panel = try? ampDashboard(data) {
+            var orbStatus = "Unavailable — no Orb reading in dashboard response"
+            do {
+                let data = try await request("https://ampcode.com/_app/remote/rjke8/getAccountSettingsPanelData", secrets: secrets)
+                let panel = try ampDashboard(data)
                 reportedEmail = panel.reportedEmail ?? reportedEmail
                 plan = panel.plan ?? plan
-                if !panel.metrics.isEmpty {
-                    metrics.removeAll { ["Agent", "Agent remaining", "Agent allowance", "Orb", "Orb remaining", "Orb allowance", "Orb usage"].contains($0.title) }
-                    metrics.insert(contentsOf: panel.metrics, at: 0)
+                let readings = panel.metrics.filter { $0.value != nil }
+                if readings.contains(where: { $0.title == "Agent" }) {
+                    metrics.removeAll { ["Agent", "Agent remaining"].contains($0.title) }
                 }
+                if readings.contains(where: { $0.title == "Orb" }) {
+                    metrics.removeAll { ["Orb", "Orb remaining", "Orb allowance"].contains($0.title) }
+                }
+                metrics.insert(contentsOf: readings, at: 0)
+            } catch MonitorError.invalidResponse {
+                orbStatus = "Unavailable — dashboard response not recognized"
+            } catch {
+                orbStatus = "Unavailable — dashboard request failed (\(ampFailure(error)))"
+            }
+            if !metrics.contains(where: { $0.title == "Agent" }) {
+                metrics.append(.init(title: "Agent allowance", kind: .note, value: nil, detail: "No Agent reading available"))
+            }
+            if !metrics.contains(where: { $0.title == "Orb" }) {
+                metrics.append(.init(title: "Orb usage", kind: .note, value: nil, detail: orbStatus))
+                // Fixed status labels only: never log tokens, response bodies, emails or helper output.
+                Logger(subsystem: "dev.jkudish.usage-monitor-poc", category: "AmpOrb")
+                    .notice("CLI: \(ampCLIStatus, privacy: .public); CLI used: \(usedAmpCLI); \(orbStatus, privacy: .public)")
             }
         case .grok:
             return try await grokSnapshot(data, identity: GrokClient.identity(token: secrets.key, http: http))
@@ -212,10 +236,18 @@ struct AdditionalClient: Sendable {
         // Narrow devalue reader for the public frontend's zero-argument query.
         // No JS execution or recursive hydration; only fixed field paths are read.
         guard data.count <= 1_048_576,
-              let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              envelope["type"] as? String == "result", let encoded = envelope["data"] as? String,
+              let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw MonitorError.invalidResponse
+        }
+        // The remote endpoint can return an application error inside HTTP 200.
+        if envelope["type"] as? String == "error",
+           let status = number((envelope["error"] as? [String: Any])?["status"]),
+           (400...599).contains(status), status.rounded(.towardZero) == status {
+            throw MonitorError.http(Int(status))
+        }
+        guard envelope["type"] as? String == "result", let encoded = envelope["data"] as? String,
               let bytes = encoded.data(using: .utf8),
-              let nodes = try JSONSerialization.jsonObject(with: bytes) as? [Any], !nodes.isEmpty else {
+              let nodes = try? JSONSerialization.jsonObject(with: bytes) as? [Any], !nodes.isEmpty else {
             throw MonitorError.invalidResponse
         }
         func field(_ object: Any?, _ key: String) -> Any? {
@@ -253,6 +285,18 @@ struct AdditionalClient: Sendable {
             }
         }
         return UsageSnapshot(metrics: metrics, plan: plan, reportedEmail: email)
+    }
+
+    private func ampFailure(_ error: Error) -> String {
+        switch error {
+        case MonitorError.http(let status): "HTTP \(status)"
+        case MonitorError.network: "network error"
+        case MonitorError.helperFailed: "CLI failed"
+        case MonitorError.signInRequired: "credentials unavailable"
+        case MonitorError.invalidProfile: "account files inaccessible"
+        case MonitorError.unsupported: "CLI unavailable"
+        default: "request failed"
+        }
     }
 
     private func request(_ endpoint: String, secrets: ConnectionSecrets, method: String = "GET", body: Data? = nil,
