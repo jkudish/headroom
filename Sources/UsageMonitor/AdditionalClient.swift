@@ -168,6 +168,16 @@ struct AdditionalClient: Sendable {
                 if usedAmpCLI {
                     let hasOrbLabel = text.range(of: #"\borb\b"#, options: [.regularExpression, .caseInsensitive]) != nil
                     cliStatus = hasOrbLabel ? "succeeded (Orb text present, no parsed meter)" : "succeeded (no Orb text)"
+                    let formats = [
+                        ("usage", #"(?i)\borb\s+usage"#),
+                        ("hours", #"(?i)\borb\s+usage\s+[0-9.,]+h\s+of\s+[0-9.,]+h"#),
+                        ("percent-first", #"(?i)[0-9.]+%\s+orb\s+usage\s+remaining"#),
+                        ("percent-last", #"(?i)\borb\s+usage[^\r\n]*\([0-9.]+%\)"#),
+                        ("small-hours", #"(?i)a1\.small\s+orb\s+hours\s+remaining"#)
+                    ].map { label, pattern in
+                        label + ":" + (text.range(of: pattern, options: .regularExpression) != nil ? "yes" : "no")
+                    }.joined(separator: ", ")
+                    cliStatus += "; " + formats
                 }
                 // Fixed status labels only: never log tokens, response bodies, emails or helper output.
                 Logger(subsystem: "dev.jkudish.usage-monitor-poc", category: "AmpOrb")
