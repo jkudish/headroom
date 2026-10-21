@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import ServiceManagement
 import SwiftUI
 
 @main
@@ -30,6 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var connectionWindow: NSWindow?
     private var monitor: Monitor?
     private let login = LoginController()
+    private let launchAtLogin = LaunchAtLogin()
+    private var changingLoginItem = false
     private lazy var resetNotifications = ResetNotificationController()
     private var localFeatureTimer: Timer?
     private var demoRoot: URL?
@@ -386,6 +389,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         addItem("Refresh all", to: menu, action: #selector(refreshAll),
                 enabled: !demo && login.accountID == nil && !monitor.entries.isEmpty && !monitor.entries.contains(where: \.refreshing))
         addItem(login.accountID == nil ? "Open account window…" : "Continue sign-in…", to: menu, action: #selector(showAccountWindow))
+        addItem("Open at Login", to: menu, action: #selector(toggleLaunchAtLogin), enabled: !demo && !changingLoginItem)
+        menu.items.last?.state = launchAtLogin.menuState
+        if launchAtLogin.readStatus() == .requiresApproval {
+            addItem("Allow Open at Login in System Settings…", to: menu,
+                    action: #selector(openLoginItemSettings), enabled: !demo && !changingLoginItem)
+        }
     }
 
     private func addItem(_ title: String, to menu: NSMenu, action: Selector,
@@ -426,6 +435,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func showAccountWindow() {
         status?.menu?.cancelTracking()
         openWindow()
+    }
+    @objc private func toggleLaunchAtLogin() {
+        guard !demo, !changingLoginItem else { return }
+        status?.menu?.cancelTracking()
+        changingLoginItem = true
+        Task {
+            defer { changingLoginItem = false }
+            do {
+                try await launchAtLogin.toggle()
+                if launchAtLogin.readStatus() == .requiresApproval {
+                    SMAppService.openSystemSettingsLoginItems()
+                }
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Could not change Open at Login"
+                alert.informativeText = "Keep Headroom in Applications and try again. You can also manage it in System Settings → General → Login Items.\n\n\(error.localizedDescription)"
+                alert.runModal()
+            }
+        }
+    }
+    @objc private func openLoginItemSettings() {
+        guard !demo else { return }
+        status?.menu?.cancelTracking()
+        SMAppService.openSystemSettingsLoginItems()
     }
     @objc private func showResetDetails(_ sender: NSMenuItem) {
         if let account = selectedAccount(sender) { openResetDetails(account) }

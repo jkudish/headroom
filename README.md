@@ -51,6 +51,8 @@ You need **macOS 14 or later on an Apple silicon Mac**. Xcode isn't needed for t
 2. Quit Headroom if it's running. Move `Headroom.app` to `~/Applications/`, replacing any older copy. Keep a single installed copy.
 3. Open Headroom, then choose **Add account** in the sidebar.
 
+To start Headroom automatically when you sign in to your Mac, choose **Open at Login** in its menu-bar menu. Choose it again to turn this off. A dash means macOS approval is required; choose **Allow Open at Login in System Settings…** to approve it. Headroom starts in the menu bar without opening the account window when accounts are already connected. Demo mode cannot change login settings.
+
 Claude and Codex need their official CLI helpers installed separately for sign-in. Check [Account setup](docs/accounts.md) and [Providers](docs/providers.md) for each service's requirements.
 
 Changing the signing identity or app location can require new Keychain approvals. To try synthetic accounts before signing in:

@@ -1,6 +1,38 @@
+import AppKit
 import Foundation
+import ServiceManagement
 import Testing
 @testable import UsageMonitor
+
+@MainActor @Test func launchAtLoginUsesSystemStatusIncludingRevokedApproval() async throws {
+    var systemStatus = SMAppService.Status.notRegistered
+    let login = LaunchAtLogin(readStatus: { systemStatus }, register: { systemStatus = .enabled },
+                              unregister: { systemStatus = .notRegistered })
+    #expect(login.menuState == .off)
+    try await login.toggle()
+    #expect(login.menuState == .on)
+    // A user can revoke approval outside Headroom. Do not keep an optimistic local preference.
+    systemStatus = .requiresApproval
+    #expect(login.menuState == .mixed)
+    try await login.toggle()
+    #expect(systemStatus == .notRegistered)
+    #expect(login.menuState == .off)
+    try await login.toggle()
+    try await login.toggle()
+    #expect(systemStatus == .notRegistered)
+}
+
+@MainActor @Test func launchAtLoginPropagatesFailuresWithoutClaimingSuccess() async {
+    struct Denied: Error {}
+    var systemStatus = SMAppService.Status.notRegistered
+    let login = LaunchAtLogin(readStatus: { systemStatus }, register: { throw Denied() },
+                              unregister: { throw Denied() })
+    await #expect(throws: Denied.self) { try await login.toggle() }
+    #expect(login.menuState == .off)
+    systemStatus = .enabled
+    await #expect(throws: Denied.self) { try await login.toggle() }
+    #expect(login.menuState == .on)
+}
 
 @Test func resetExpiryRemindersUseUnusedCreditsAndDoNotReplayOldThresholds() throws {
     let now = Date(timeIntervalSince1970: 1_800_000_000)
