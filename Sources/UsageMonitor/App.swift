@@ -451,6 +451,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 let alert = NSAlert()
                 alert.messageText = "Could not change Open at Login"
                 alert.informativeText = "Keep Headroom in Applications and try again. You can also manage it in System Settings → General → Login Items.\n\n\(error.localizedDescription)"
+                NSApplication.shared.activate(ignoringOtherApps: true)
                 alert.runModal()
             }
         }
