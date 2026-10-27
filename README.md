@@ -91,7 +91,7 @@ For a local installation, quit Headroom, then copy `.build/Headroom.app` to `~/A
 
 ## Before you connect accounts
 
-Some connectors use private interfaces and can break when providers change them. Implemented support does not mean every provider has been verified with a live account. In particular, Amp's supplemental Orb query and Grok sign-in need further live verification.
+Some connectors use private interfaces and can break when providers change them. I will do my best to continue to support the providers in this project.
 
 Official helpers can request broad account permissions. Headroom is not a provider-approved third-party OAuth integration. Review the [credential and security boundaries](SECURITY.md) before signing in.
 
