@@ -16,7 +16,7 @@
 
 Connect multiple Claude and Codex accounts, even when they aren't signed in to your local CLIs. Keep subscription limits, reset times, and API balances together without opening each dashboard.
 
-Headroom is a native SwiftUI/AppKit app. It's free and open source. The [Apple silicon download](https://github.com/jkudish/headroom/releases/tag/v0.1) is signed by Joachim Kudish and notarized by Apple.
+Headroom is a native SwiftUI/AppKit app. It's free and open source. The [Apple silicon download](https://github.com/jkudish/headroom/releases/tag/v0.1) is signed and notarized by Apple.
 
 ## A look at the app
 
