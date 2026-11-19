@@ -14,8 +14,13 @@ Quotas, wallet balances, spending, and caps keep their own units. Missing inform
 | Grok Bot | Private sign-in window or manual session Cookie header | Cursor-backed verified identity, allowance, and trial information. Trial expiry isn't a recurring quota reset. Embedded SSO is experimental. |
 | Amp | Account access token | Official `amp usage` in a private home with only the selected `sgamp_` token; private balance HTTP fallback. Supplemental dashboard query attempts independent Agent/Orb percentages. Dollars, Orb hours, and wallet credits remain separate. See below. |
 | z.ai Coding Plan | Coding Plan API key; Global or China region | Returned quota types, periods, and resets. No wallet balance or documented key-to-email lookup. |
+| Antigravity | Independent official `agy` CLI Google sign-in | Google AI subscription (individual, AI Pro, Ultra) 5-hour and weekly remaining quota per returned model group, with resets. Identity from the agy-managed ID token when present. Refreshes every 5 minutes. See below. |
 
 Claude optional reset and cloud-credit reads use a private usage extension, falling back to ordinary usage after HTTP 400/403. Malformed optional fields don't hide ordinary quotas. Saved reset expiry and promotional credit availability update locally at known time boundaries; these display updates don't poll the provider. See [Reset credits](reset-credits.md).
+
+### Antigravity coverage
+
+Headroom runs `agy -p /usage --output-format json` in a private home per account. `SSH_TTY` selects agy's file token storage, so your own agy login and Keychain item are untouched. Browser launchers are stubbed and auto-update is disabled. agy owns the Google OAuth client, token refresh, and every Cloud Code request; Headroom never embeds Google client credentials or calls those endpoints itself. Reports don't run a model turn. Remaining fractions outside 0–1 stay unavailable. **Report parsing is fixture-tested; live sign-in and payloads remain unverified in Headroom.**
 
 ### Amp Orb coverage
 

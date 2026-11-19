@@ -202,6 +202,7 @@ struct MonitorView: View {
             Text(login.provider == .codex
                  ? "Open the link in the right browser profile, then enter the code on OpenAI's page."
                  : login.provider == .grok ? "Finish signing in in your browser. Choose the Grok account you want to connect."
+                 : login.provider == .antigravity ? "Open the link in the right browser profile. Sign in with Google within a minute, then paste the authorization code below."
                  : "Open the link in the right browser profile. Sign in, then paste Claude's code below.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 .help(login.provider == .codex ? "Enable device code authorization in ChatGPT Security settings if sign-in is blocked." : "Use the browser profile for the account you want to connect.")

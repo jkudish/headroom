@@ -168,7 +168,7 @@ final class Monitor {
             guard !Task.isCancelled, !isPaused() else { return }
             guard let entry = entries.first(where: { $0.id == id }), entry.account.provider.supportsRead,
                   !entry.refreshing, !entry.resetting, let schedule = refreshSchedule[id] else { continue }
-            let due = schedule.failures == 0 && entry.account.provider != .claude
+            let due = schedule.failures == 0 && ![.claude, .antigravity].contains(entry.account.provider)
                 ? schedule.after.addingTimeInterval(maxAge - 60) : schedule.after
             if now() >= due { await refresh(id) }
         }
@@ -207,7 +207,7 @@ final class Monitor {
             try store.save(accounts)
             entries[current].account = accounts[current]
             entries[current].snapshot = snapshot
-            let interval: TimeInterval = entries[current].account.provider == .claude ? 300 : 60
+            let interval: TimeInterval = [.claude, .antigravity].contains(entries[current].account.provider) ? 300 : 60
             refreshSchedule[id] = (now().addingTimeInterval(interval), 0, false)
         } catch {
             guard requests[id] == requestID, let current = entries.firstIndex(where: { $0.id == id }) else { return }

@@ -22,7 +22,7 @@ final class LoginController {
         let helper = provider == .grok ? "grok" : provider == .codex ? "codex" : "claude"
         let paths = [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/\(helper)").path,
                      "/opt/homebrew/bin/\(helper)", "/usr/local/bin/\(helper)"]
-        let executable = provider == .grok ? try GrokAuth.executable().path : paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+        let executable = provider == .grok ? try GrokAuth.executable().path : provider == .antigravity ? AntigravityAuth.terminal.path : paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
         guard let executable else {
             throw MonitorError.unsupported("Install \(provider.title)'s official CLI at ~/.local/bin/\(helper) or with Homebrew.")
         }
@@ -32,8 +32,8 @@ final class LoginController {
         let output = Pipe()
         let attempt = UUID()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = provider == .grok ? ["login", "--oauth"] : provider == .codex ? CodexAuth.loginArguments : ["auth", "login", "--claudeai"]
-        process.environment = try provider == .grok ? GrokAuth.environment(id, store: store) : provider == .codex ? CodexAuth.environment(id, store: store) : store.helperEnvironment(id)
+        process.arguments = provider == .grok ? ["login", "--oauth"] : provider == .antigravity ? try AntigravityAuth.loginArguments() : provider == .codex ? CodexAuth.loginArguments : ["auth", "login", "--claudeai"]
+        process.environment = try provider == .grok ? GrokAuth.environment(id, store: store) : provider == .antigravity ? AntigravityAuth.environment(id, store: store) : provider == .codex ? CodexAuth.environment(id, store: store) : store.helperEnvironment(id)
         process.currentDirectoryURL = store.profile(id)
         process.standardInput = input
         process.standardOutput = output
@@ -73,9 +73,11 @@ final class LoginController {
 
     func submit(_ code: String) throws {
         let code = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard provider == .claude, !submitted, process?.isRunning == true, let input,
+        // Google authorization codes contain slashes; Claude codes contain #.
+        let pattern = provider == .antigravity ? #"^[A-Za-z0-9_.\-/]+$"# : #"^[A-Za-z0-9_.\-#]+$"#
+        guard [.claude, .antigravity].contains(provider), !submitted, process?.isRunning == true, let input,
               !code.isEmpty, code.utf8.count <= 4096,
-              code.range(of: #"^[A-Za-z0-9_.\-#]+$"#, options: .regularExpression) != nil else {
+              code.range(of: pattern, options: .regularExpression) != nil else {
             throw MonitorError.invalidCode
         }
         do { try input.fileHandleForWriting.write(contentsOf: Data((code + "\n").utf8)) }
@@ -142,6 +144,22 @@ struct LoginPrompt {
                   let callback = items.first(where: { $0.name == "redirect_uri" })?.value.flatMap(URLComponents.init(string:)),
                   callback.scheme == "http", callback.host == "127.0.0.1", callback.port != nil,
                   callback.path == "/callback", callback.user == nil, callback.password == nil else { return nil }
+            return Self(url: url, deviceCode: nil)
+        }
+        if provider == .antigravity {
+            // agy writes through a pseudo-terminal, so lines end in CRLF. Swift treats CRLF as
+            // one character, which a lookahead for the line end can't split.
+            let buffer = buffer.replacingOccurrences(of: "\r\n", with: "\n")
+            guard let range = buffer.range(of: #"https://accounts\.google\.com/o/oauth2/auth\?[^\s\x{1B}]+(?=\r?\n)"#, options: .regularExpression),
+                  let url = URL(string: String(buffer[range])),
+                  let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  parts.host == "accounts.google.com", parts.user == nil, parts.password == nil, parts.port == nil,
+                  let items = parts.queryItems, Set(items.map(\.name)).count == items.count,
+                  items.first(where: { $0.name == "response_type" })?.value == "code",
+                  items.first(where: { $0.name == "code_challenge_method" })?.value == "S256",
+                  items.first(where: { $0.name == "redirect_uri" })?.value == AntigravityAuth.callback,
+                  ["state", "code_challenge", "client_id"].allSatisfy({ name in items.contains(where: { $0.name == name && $0.value?.isEmpty == false }) })
+            else { return nil }
             return Self(url: url, deviceCode: nil)
         }
         guard provider == .claude else { return nil }

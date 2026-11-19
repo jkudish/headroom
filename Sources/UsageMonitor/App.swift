@@ -217,6 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let account = try store.load().first(where: { $0.id == id }) else { throw MonitorError.signInRequired }
         if account.provider == .claude { return try await ClaudeClient(store: store).fetch(id) }
         if account.provider == .codex { return try await CodexClient(store: store).fetch(id) }
+        if account.provider == .antigravity { return try await AntigravityClient(store: store).fetch(id) }
         if account.provider == .grok, account.options["grokAuth"] == "helper" { return try await GrokClient(store: store).fetch(id) }
         let secrets = try store.secrets(id)
         switch account.provider {

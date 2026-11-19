@@ -3,7 +3,7 @@ import Foundation
 enum Provider: String, Codable, CaseIterable, Identifiable, Sendable {
     case claude, codex, grok, cursor, amp, zai, openRouter, searchAPI, dataForSEO, firecrawl
     case openAIAPI, anthropicAPI, xaiAPI, serpAPI, tavily, jina, exa
-    case parallel, brave, perplexity, valyu, gemini, you, kagi
+    case parallel, brave, perplexity, valyu, gemini, you, kagi, antigravity
 
     var id: String { rawValue }
     var title: String {
@@ -32,10 +32,11 @@ enum Provider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .gemini: "Gemini"
         case .you: "You.com"
         case .kagi: "Kagi"
+        case .antigravity: "Antigravity"
         }
     }
 
-    var usesHelper: Bool { self == .claude || self == .codex }
+    var usesHelper: Bool { self == .claude || self == .codex || self == .antigravity }
     var supportsRead: Bool { ![Self.exa, .brave, .perplexity, .gemini, .kagi].contains(self) }
 
     var connectionHelp: String {
@@ -61,6 +62,7 @@ enum Provider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .valyu: "Use a key with billing:read to see credits and pay-as-you-go spend."
         case .brave, .perplexity, .gemini, .kagi: "Billing is not supported. Check the dashboard."
         case .you: "Use an API key with account balance access."
+        case .antigravity: "Sign in through the official Antigravity CLI (agy) using the Google account for this subscription."
         }
     }
 
@@ -91,6 +93,7 @@ enum Provider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .gemini: address = "https://aistudio.google.com/usage"
         case .you: address = "https://you.com/platform"
         case .kagi: address = "https://kagi.com/settings?p=api"
+        case .antigravity: address = "https://antigravity.google/"
         }
         return URL(string: address)!
     }

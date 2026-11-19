@@ -399,7 +399,7 @@ enum MonitorError: Error, LocalizedError, Equatable {
         case .helperFailed: "Sign-in failed. Try again."
         case .loginBusy: "This account is signing in or renewing. Wait and try again."
         case .renewalUnconfirmed: "Could not confirm renewed credentials. Sign in again to reconnect this account."
-        case .invalidCode: "Paste Claude's authorization code, not an API key or URL."
+        case .invalidCode: "Paste the authorization code, not an API key or URL."
         case .unsupported(let message): message
         }
     }
