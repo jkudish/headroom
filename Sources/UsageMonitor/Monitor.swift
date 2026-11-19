@@ -73,6 +73,14 @@ final class Monitor {
         beginLogin(id)
     }
 
+    func setDevinOrganization(_ id: UUID, _ organization: String) throws {
+        guard let index = entries.firstIndex(where: { $0.id == id }), entries[index].account.provider == .devin else { return }
+        var accounts = entries.map(\.account)
+        accounts[index].options["organization"] = organization
+        try store.save(accounts)
+        entries[index].account = accounts[index]
+    }
+
     func setGrokHelper(_ id: UUID, enabled: Bool) throws {
         guard let index = entries.firstIndex(where: { $0.id == id }), entries[index].account.provider == .grok else { return }
         var accounts = entries.map(\.account)

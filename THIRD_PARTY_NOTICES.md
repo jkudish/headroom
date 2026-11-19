@@ -4,7 +4,7 @@ Headroom's original code is covered by the [MIT license](LICENSE). Provider name
 
 ## Reference projects
 
-- [CodexBar](https://github.com/steipete/CodexBar), by Peter Steinberger and contributors, informed the native menu and provider parsing. References include the [Amp parser](https://github.com/steipete/CodexBar/blob/3bfbf4a51d3af6c7307d5aa189e85b3e94390fe8/Sources/CodexBarCore/Providers/Amp/AmpUsageParser.swift) and [Claude optional credit/reset fields](https://github.com/steipete/CodexBar/tree/2e19c9276bd43286b28b662804825387ac8b0e17/Sources/CodexBarCore/Providers/Claude).
+- [CodexBar](https://github.com/steipete/CodexBar), by Peter Steinberger and contributors, informed the native menu and provider parsing. References include the [Amp parser](https://github.com/steipete/CodexBar/blob/3bfbf4a51d3af6c7307d5aa189e85b3e94390fe8/Sources/CodexBarCore/Providers/Amp/AmpUsageParser.swift) [Claude optional credit/reset fields](https://github.com/steipete/CodexBar/tree/2e19c9276bd43286b28b662804825387ac8b0e17/Sources/CodexBarCore/Providers/Claude), and the [Devin quota fields](https://github.com/steipete/CodexBar/tree/main/Sources/CodexBarCore/Providers/Devin).
 - [Rashun](https://github.com/AlexanderHeffernan/Rashun), by Alexander Heffernan and contributors, was a reference for investigating Amp Orb usage.
 - [Official Grok helper source](https://github.com/xai-org/grok-build/tree/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8) informed isolated helper authentication. Helpers are installed separately, not bundled. Source licensing doesn't imply permission to register a third-party OAuth client or use a hosted service.
 
@@ -50,6 +50,7 @@ Bundled PNGs are in `Sources/UsageMonitor/Resources/`. Artwork is resized or ras
 | `xai-logo.png` | [xAI website artwork](https://x.ai/) |
 | `amp-logo.png` | [Amp app icon](https://ampcode.com/app-icon.svg) |
 | `zai-logo.png` | [z.ai logo](https://z-cdn.chatglm.cn/z-ai/static/logo.svg) |
+| `devin-logo.png` | [Devin mark via CodexBar](https://github.com/steipete/CodexBar/blob/main/docs/logos/devin.svg) |
 | `openrouter-logo.png` | [OpenRouter glyph](https://openrouter.ai/favicon/glyph.png) |
 | `searchapi-logo.png` | [SearchAPI touch icon](https://www.searchapi.io/apple-touch-icon.png) |
 | `dataforseo-logo.png` | [DataForSEO website artwork](https://dataforseo.com/) |

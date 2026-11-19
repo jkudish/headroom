@@ -33,6 +33,7 @@ struct ConnectionView: View {
         case .anthropicAPI: "Organization Admin key (sk-ant-admin…)"
         case .openAIAPI: "Organization Admin key"
         case .xaiAPI: "Team Management key"
+        case .devin: "Copied cURL request or bearer token"
         default: "API key or access token"
         }
     }
@@ -67,9 +68,9 @@ struct ConnectionView: View {
                         Text("China · BigModel").tag("cn")
                     }.disabled(account != nil)
                 }
-                if provider == .exa || provider == .openAIAPI {
-                    TextField(provider == .exa ? "API key ID to report" : "Organization ID (optional)", text: $selector)
-                        .disabled(account != nil)
+                if provider == .exa || provider == .openAIAPI || provider == .devin {
+                    TextField(provider == .exa ? "API key ID to report" : provider == .devin ? "Organization (optional; defaults to your current one)" : "Organization ID (optional)", text: $selector)
+                        .disabled(account != nil && provider != .devin)
                 }
                 Text("Saved in your Mac's Keychain.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -93,7 +94,7 @@ struct ConnectionView: View {
         .onAppear {
             mode = account?.options["mode"] ?? "wallet"
             region = account?.options["region"] ?? "global"
-            selector = account?.options[provider == .exa ? "keyID" : "organizationID"] ?? ""
+            selector = account?.options[provider == .exa ? "keyID" : provider == .devin ? "organization" : "organizationID"] ?? ""
         }
         .onDisappear { key = ""; username = ""; discoveryReport = nil }
     }
@@ -192,6 +193,11 @@ struct ConnectionView: View {
     }
 
     private func save() {
+        if provider == .devin, let copied = DevinClient.copiedRequest(key) {
+            if let organization = copied.organization { selector = organization }
+            save(ConnectionSecrets(key: copied.token, username: nil))
+            return
+        }
         let secrets = ConnectionSecrets(key: key.trimmingCharacters(in: .whitespacesAndNewlines),
                                         username: provider == .dataForSEO ? username.trimmingCharacters(in: .whitespacesAndNewlines) : nil)
         save(secrets)
@@ -203,6 +209,7 @@ struct ConnectionView: View {
         do {
             let id: UUID
             if let account {
+                if provider == .devin { try monitor.setDevinOrganization(account.id, selector.trimmingCharacters(in: .whitespacesAndNewlines)) }
                 try monitor.reconnect(account.id, secrets: secrets)
                 id = account.id
             } else {
@@ -211,6 +218,7 @@ struct ConnectionView: View {
                 if provider == .zai { options["region"] = region }
                 if provider == .exa { options["keyID"] = selector.trimmingCharacters(in: .whitespacesAndNewlines) }
                 if provider == .openAIAPI { options["organizationID"] = selector.trimmingCharacters(in: .whitespacesAndNewlines) }
+                if provider == .devin { options["organization"] = selector.trimmingCharacters(in: .whitespacesAndNewlines) }
                 options.merge(optionHints) { _, detected in detected }
                 id = try monitor.add(label: "", provider: provider, options: options, secrets: secrets)
             }

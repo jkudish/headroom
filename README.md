@@ -41,7 +41,7 @@ These screenshots use the built-in demo. All accounts and readings are synthetic
 - Warn before unused Claude or Codex reset credits expire. Codex reset use requires confirmation.
 - Let same-Mac agents query cached usage through an optional, read-only [MCP server](docs/local-mcp.md).
 
-Claude, Codex, Grok / SuperGrok, Grok Bot, Amp, and z.ai Coding Plan have connectors, alongside OpenRouter and API billing services. Credential requirements and coverage vary. See the [provider reference](docs/providers.md) before creating a key.
+Claude, Codex, Grok / SuperGrok, Grok Bot, Amp, z.ai Coding Plan, and Devin have connectors, alongside OpenRouter and API billing services. Credential requirements and coverage vary. See the [provider reference](docs/providers.md) before creating a key.
 
 ## Download and install
 

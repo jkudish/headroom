@@ -222,6 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         switch account.provider {
         case .cursor: return try await GrokBotClient().fetch(account, secrets: secrets)
         case .zai: return try await ZaiClient().fetch(account, secrets: secrets)
+        case .devin: return try await DevinClient().fetch(account, secrets: secrets)
         case .openRouter, .searchAPI, .dataForSEO, .firecrawl, .openAIAPI, .anthropicAPI:
             return try await BillingClient().fetch(account, secrets: secrets)
         default:
